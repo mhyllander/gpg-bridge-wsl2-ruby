@@ -4,11 +4,11 @@ This is a tool inspired by
 [wsl-gpg-bridge](https://github.com/Riebart/wsl-gpg-bridge), which I used
 in WSL1 with much satisfaction, together with
 [Gpg4win](https://gpg4win.org/) and a Yubikey. I use the PGP key on the
-Yubikey for ssh. Gpg4win's gpg-agent is configured with enabled PuTTY
+Yubikey for ssh. Gpg4win's gpg-agent.exe is configured with enabled PuTTY
 support (Pageant).
 
 When I switched to WSL2, I found that wsl-gpg-bridge did not work anymore.
-The main problem is that the GPG bridge runs in WSL but can no longer
+The main problem is that the wsl-gpg-bridge runs in WSL but can no longer
 connect with gpg-agent.exe in Windows, because that only binds to
 127.0.0.1.
 
@@ -21,11 +21,11 @@ gpg/ssh -> Unix socket -> WSL-bridge -> Win-bridge -> Assuan socket -> gpg-agent
 To support ssh Pagent, the Win-bridge uses
 [net-ssh](https://github.com/net-ssh/net-ssh) to talk directly with
 gpg-agent.exe Pageant socket, instead of using the ssh Assuan socket that
-gpg-agent.exe also provides.
+gpg-agent.exe also creates.
 
 Since WSL2 has a different IP address than the Windows host, the Windows
-firewall allow incoming connections to the Win-bridge. Specifically it must
-allow connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports
+firewall must allow incoming connections to the Win-bridge. Specifically it
+must allow connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports
 6910-6913.
 
 ## Dependencies
@@ -126,9 +126,9 @@ gpg-agent.exe has cached the PIN for future use.
 When you are using RDP to a remote host, RDP can redirect the local Yubikey
 smartcard to the remote host, where the remote gpg-agent.exe can access it.
 
-Sometimes the smart-card will be blocked on the local host so that the
-remote host cannot access it. When that happens you need to restart some
-local services to free the Yubikey for usage on the remote host.
+Sometimes the Yubikey smart card will be blocked on the local host so that
+the remote host cannot access it. When that happens you need to restart
+some local services to free the Yubikey for use on the remote host.
 
 I have a Windows batch script that I run as Administrator to handle that
 situation. See [rdp_yubikey.cmd](rdp_yubikey.cmd).
