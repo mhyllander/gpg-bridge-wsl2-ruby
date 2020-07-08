@@ -60,6 +60,8 @@ Usage: gpgbridge.rb [options]
     -h, --help                       Prints this help
 ```
 
+## Example
+
 I have the following in my `~/.bash_profile` in WSL:
 
 ```bash
@@ -109,3 +111,24 @@ This will start the WSL-bridge in WSL, which will in turn start the
 Win-bridge in Windows. Note that only one WSL-bridge will be started per
 WSL distribution, and they will all share the same single Win-bridge
 running in Windows.
+
+## Known problems
+
+The first time you use ssh, gpg-agent.exe will prompt you for the PIN
+entry. The ssh command will either timeout and fail, or fail after you
+entered the PIN. The timeout is hard-coded in net-ssh.
+
+Either way, if you try the ssh command again it will now work, since
+gpg-agent.exe has cached the PIN for future use.
+
+## Remote Desktop
+
+When you are using RDP to a remote host, RDP can redirect the local Yubikey
+smartcard to the remote host, where the remote gpg-agent.exe can access it.
+
+Sometimes the smart-card will be blocked on the local host so that the
+remote host cannot access it. When that happens you need to restart some
+local services to free the Yubikey for usage on the remote host.
+
+I have a Windows batch script that I run as Administrator to handle that
+situation. See [rdp_yubikey.cmd](rdp_yubikey.cmd).
