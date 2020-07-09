@@ -16,17 +16,27 @@ After looking at the code, I decided I would try to write a similar GPG
 bridge in Ruby. To solve the access problem, the bridge is actually two
 bridges:
 
-gpg/ssh -> Unix socket -> WSL-bridge -> Win-bridge -> (Assuan socket) -> gpg-agent.exe
+WSL1:
 
-Since Windows does not support Unix sockets, gpg-agent.exe uses something
+```
+gpg/ssh -> (Unix socket) WSL-bridge ->
+    -> (TCP socket) Win-bridge -> (TCP/Assuan socket) gpg-agent.exe
+```
+
+WSL2:
+
+```
+gpg/ssh -> (Unix socket) WSL-bridge ->
+    -> (Windows Firewall) -> (TCP socket) Win-bridge -> (TCP/Assuan socket) gpg-agent.exe
+```
+
+Since Windows does not support Unix sockets, gpg-agent.exe uses a mechanism
 called an Assuan socket. This is a file that contains the TCP port that
-gpg-agent is listening on, and a nonce that must be sent after connecting
-to authenticate. The Win-bridge reads the Assuan socket files and connects
-directly with gpg-agent.exe (except for the socket for ssh).
-
-To support ssh Pagent, the Win-bridge uses
-[net-ssh](https://github.com/net-ssh/net-ssh) to talk directly with the
-gpg-agent.exe Pageant socket.
+gpg-agent is listening on, and a nonce that is sent as authentication after
+connecting. The Win-bridge reads the Assuan socket files and connects
+directly with gpg-agent.exe (except for the socket for ssh). For ssh Pagent
+support, the Win-bridge uses [net-ssh](https://github.com/net-ssh/net-ssh)
+to talk directly with the gpg-agent.exe Pageant socket.
 
 ## Security
 
@@ -98,29 +108,29 @@ then
     # In Windows, start a Ruby command windows, run "gem install -N sys-proctable net-ssh".
     function start_gpgbridge
     {
-	local opts=''
-	if ! command -v ruby.exe >/dev/null
-	then
-	    echo 'No ruby.exe found in path'
-	    return
-	fi
-	# Uncomment the following line for WSL2 to set the remote address
-	#opts="--remote-address $(ip route | awk '/^default via / {print $3}')"
-	if [[ $1 == ssh ]]; then
-	    opts="$opts --enable-ssh-support"
-	    export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
-	fi
-	ruby /mnt/c/Program1/gpgbridge.rb --daemon --pidfile ~/.gpgbridge.pid --logfile ~/.gpgbridge.log --verbose --windows-logfile 'C:\Program1\gpgbridge.log' --windows-pidfile 'C:\Program1\gpgbridge.pid' $opts
+        local opts=''
+        if ! command -v ruby.exe >/dev/null
+        then
+            echo 'No ruby.exe found in path'
+            return
+        fi
+        # Uncomment the following line for WSL2 to set the remote address
+        #opts="--remote-address $(ip route | awk '/^default via / {print $3}')"
+        if [[ $1 == ssh ]]; then
+            opts="$opts --enable-ssh-support"
+            export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+        fi
+        ruby /mnt/c/Program1/gpgbridge.rb --daemon --pidfile ~/.gpgbridge.pid --logfile ~/.gpgbridge.log --verbose --windows-logfile 'C:\Program1\gpgbridge.log' --windows-pidfile 'C:\Program1\gpgbridge.pid' $opts
     }
     function stop_gpgbridge
     {
-	pkill -TERM -f 'ruby.*gpgbridge\.rb'
+        pkill -TERM -f 'ruby.*gpgbridge\.rb'
     }
     function restart_gpgbridge
     {
-	stop_gpgbridge
-	sleep 1
-	start_gpgbridge "$@"
+        stop_gpgbridge
+        sleep 1
+        start_gpgbridge "$@"
     }
     start_gpgbridge ssh
 fi
