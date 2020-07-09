@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 # gpgbridge.rb replaces the separate solutions provided by npiperelay,
-# weasel_pageant and gpgbridge.py. It can also forward ssh-agent requests
+# weasel_pageant and wsl-gpg-bridge. It can also forward ssh-agent requests
 # to gpg-agent, when using PGP keys for ssh authentication. It will also
 # work with WSL2.
 
@@ -65,7 +65,9 @@ class WslBridge
 
     opts = ['--windows-bridge']
 
-    noncefile = %x[wslpath -w '#{options[:noncefile]}'].chomp
+    noncedir = File.dirname options[:noncefile]
+    file = File.basename options[:noncefile]
+    noncefile = %x[wslpath -w '#{noncedir}'].chomp + '\\' + file
     opts += ['--noncefile', noncefile]
 
     opts += ['--remote-address', options[:windows_address]] if options[:windows_address]
@@ -76,6 +78,8 @@ class WslBridge
     opts += ['--verbose'] if options[:verbose]
     
     winpath = %x[wslpath -w '#{__FILE__}'].chomp
+
+    log "command #{winpath} #{opts}"
 
     @winbridge = Process.fork do
       Process.setsid
@@ -492,11 +496,11 @@ end
 if options[:noncefile].nil?
   begin
     win_gpghome = %x[gpgconf.exe --list-dirs homedir].chomp
-    win_noncefile = win_gpghome + '\gpgbridge.nonce'
+    noncefile = 'gpgbridge.nonce'
     if @windows_bridge
-      options[:noncefile] = win_noncefile
+      options[:noncefile] = win_gpghome + '\\' + noncefile
     else
-      options[:noncefile] = %x[wslpath -u '#{win_noncefile}'].chomp
+      options[:noncefile] = %x[wslpath -u '#{win_gpghome}'].chomp + '/' + noncefile
     end
   rescue StandardError => e
     $stderr.puts "Error constructing path to noncefile: #{e.inspect}"
