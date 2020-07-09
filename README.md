@@ -16,17 +16,31 @@ After looking at the code, I decided I would try to write a similar GPG
 bridge in Ruby. To solve the access problem, the bridge is actually two
 bridges:
 
-gpg/ssh -> Unix socket -> WSL-bridge -> Win-bridge -> Assuan socket -> gpg-agent.exe
+gpg/ssh -> Unix socket -> WSL-bridge -> Win-bridge -> (Assuan socket) -> gpg-agent.exe
+
+Since Windows does not support Unix sockets, gpg-agent.exe uses something
+called an Assuan socket. This is a file that contains the TCP port that
+gpg-agent is listening on, and a nonce that must be sent after connecting
+to authenticate. The Win-bridge reads the Assuan socket files and connects
+directly with gpg-agent.exe (except for the socket for ssh).
 
 To support ssh Pagent, the Win-bridge uses
-[net-ssh](https://github.com/net-ssh/net-ssh) to talk directly with
-gpg-agent.exe Pageant socket, instead of using the ssh Assuan socket that
-gpg-agent.exe also creates.
+[net-ssh](https://github.com/net-ssh/net-ssh) to talk directly with the
+gpg-agent.exe Pageant socket.
+
+## Security
 
 Since WSL2 has a different IP address than the Windows host, the Windows
 firewall must allow incoming connections to the Win-bridge. Specifically it
-must allow connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports
-6910-6913.
+must allow incoming connections from 172.16.0.0/12 and 192.168.0.0/16 to
+TCP ports 6910-6913.
+
+To secure connections to the Win-bridge, a simple nonce authentication
+scheme similar to Assuan sockets is used. The Win-bridge stores a nonce in
+a file that should only be accessible by the user. By default it saves the
+file in the GPG home directory in Windows. The WSL-bridge reads the nonce
+from the file and sends it to the Win-bridge to authenticate. This ensures
+that only processes that can read the nonce file can authenticate.
 
 ## Dependencies
 
@@ -47,16 +61,17 @@ is reachable from both Windows and WSL.
 $ ruby /mnt/c/Program1/gpgbridge.rb --help
 Usage: gpgbridge.rb [options]
     -s, --[no-]enable-ssh-support    Enable proxying of gpg-agent SSH sockets
-    -r, --remote-address IPADDR      The remote address of the Windows bridge component. Needed for WSL2. [127.0.0.1]
-        --port PORT                  The first port (of three or four) to use for proxying sockets
-    -l, --logfile PATH               The log file path
     -d, --[no-]daemon                Run as a daemon in the background
-    -p, --pidfile PATH               The PID file path
+    -r, --remote-address IPADDR      The remote address of the Windows bridge component. Needed for WSL2. [127.0.0.1]
+    -p, --port PORT                  The first port (of three or four) to use for proxying sockets
+    -n, --noncefile PATH             The nonce file path (defaults to file in Windows gpg homedir)
+    -l, --logfile PATH               The log file path
+    -i, --pidfile PATH               The PID file path
     -v, --[no-]verbose               Verbose logging
-    -W, --[no-]windows-bridge        Start the Windows bridge (used by the WSL bridge))
+    -W, --[no-]windows-bridge        Start the Windows bridge (used by the WSL bridge)
     -R, --windows-address IPADDR     The IP address of the Windows bridge. [0.0.0.0]
     -L, --windows-logfile PATH       The log file path of the Windows bridge
-    -P, --windows-pidfile PATH       The PID file path of the Windows bridge
+    -I, --windows-pidfile PATH       The PID file path of the Windows bridge
     -h, --help                       Prints this help
 ```
 
@@ -97,9 +112,13 @@ then
 	fi
 	ruby /mnt/c/Program1/gpgbridge.rb --daemon --pidfile ~/.gpgbridge.pid --logfile ~/.gpgbridge.log --verbose --windows-logfile 'C:\Program1\gpgbridge.log' --windows-pidfile 'C:\Program1\gpgbridge.pid' $opts
     }
-    function restart_gpgbridge
+    function stop_gpgbridge
     {
 	pkill -TERM -f 'ruby.*gpgbridge\.rb'
+    }
+    function restart_gpgbridge
+    {
+	stop_gpgbridge
 	sleep 1
 	start_gpgbridge "$@"
     }

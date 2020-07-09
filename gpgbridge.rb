@@ -26,13 +26,13 @@ BUFSIZ = 4096
 class WslBridge
   def initialize(options)
     @verbose = options[:verbose]
+    @pidfile = options[:pidfile]
 
     # start WindowsBridge
     start_windows_bridge options
 
     # setup cleaup handlers
-    at_exit { log 'exiting' }
-    #at_exit { stop_windows_bridge }
+    at_exit { cleanup }
 
     # stop gpg-agent if running in WSL
     log 'stop gpg-agent' if @verbose
@@ -42,9 +42,10 @@ class WslBridge
     log 'start listeners for WSL sockets' if @verbose
     remote_address = options[:remote_address]
     socket_names = options[:socket_names]
+    noncefile = options[:noncefile]
     @threads = socket_names.collect do |socket_name, port|
-      Thread.start(socket_name, remote_address, port) do |s, r, p|
-        start_listener s, r, p
+      Thread.start(socket_name, remote_address, port, noncefile) do |s, r, p, n|
+        start_listener s, r, p, n
       end
     end
   end
@@ -53,16 +54,20 @@ class WslBridge
     puts "#{DateTime.now.iso8601} [WSL/#{Process.pid}] #{msg}"
   end
 
+  def cleanup
+    #stop_windows_bridge
+    File.unlink @pidfile if @pidfile
+    log 'exiting'
+  end
+
   def start_windows_bridge(options)
     log 'start windows bridge' if @verbose
 
-    require 'ptools'
-    unless File.which('ruby.exe')
-      log "Error: cannot find ruby.exe in the PATH: #{ENV['PATH']}"
-      exit 2
-    end
-
     opts = ['--windows-bridge']
+
+    noncefile = %x[wslpath -w '#{options[:noncefile]}'].chomp
+    opts += ['--noncefile', noncefile]
+
     opts += ['--remote-address', options[:windows_address]] if options[:windows_address]
     opts += ['--port', options[:port].to_s] if options[:port]
     opts += ['--logfile', options[:windows_logfile]] if options[:windows_logfile]
@@ -92,15 +97,19 @@ class WslBridge
     end
   end
 
-  def start_listener(socket_name, remote_address, port)
+  def start_listener(socket_name, remote_address, port, noncefile)
     socket_path = %x[gpgconf --list-dirs #{socket_name}].chomp
     log "start listener on WSL socket #{socket_name} = #{socket_path}" if @verbose
     File.unlink(socket_path) if File.exist?(socket_path) && File.socket?(socket_path)
     Socket.unix_server_loop(socket_path) do |sock, client_addrinfo|
-      log 'got connect request' if @verbose
+      log "got connect request on WSL socket #{socket_name} = #{socket_path}" if @verbose
       Thread.new do
+        # get WindowsBridge nonce
+        nonce = get_nonce noncefile
         #log 'connect with remote'
         winbridge = TCPSocket.new remote_address, port
+        # send the nonce to authenticate, if the nonce is wrong the connection will be closed immediately
+        winbridge.send nonce, 0
         #log 'connected'
         begin
           loop = true
@@ -135,6 +144,21 @@ class WslBridge
     end
   end
   
+  def get_nonce(noncefile)
+    unless File.exist? noncefile
+      log "missing noncefile #{noncefile}"
+      return ''
+    end
+    nonce = []
+    File.open(noncefile, 'rb') do |f|
+      f.each_byte do |b|
+        nonce << b
+        break if nonce.length == 16 # break when 16 bytes have been read
+      end
+    end
+    nonce.pack('C16')
+  end
+
   def trap_signals
     Signal.trap('HUP') do
       exit 0
@@ -159,21 +183,28 @@ end
 # from Gpg4Win. It can forward both gpg and SSH Pagent requests.
 class WindowsBridge
   def initialize(options)
-    at_exit { log 'exiting' }
     @verbose = options[:verbose]
+    @noncefile = options[:noncefile]
+    @pidfile = options[:pidfile]
 
     # make sure gpg-agent.exe is running
     system 'gpg-connect-agent.exe /bye 2>nul'
+
+    # create nonce
+    nonce = create_nonce @noncefile
+
+    # setup cleaup handlers
+    at_exit { cleanup }
 
     log 'start listeners for Assuan sockets' if @verbose
     remote_address = options[:remote_address]
     socket_names = options[:socket_names]
     @threads = socket_names.collect do |socket_name, port|
-      Thread.start(socket_name, remote_address, port) do |s, r, p|
+      Thread.start(socket_name, remote_address, port, nonce) do |s, r, p, n|
         if socket_name == 'agent-ssh-socket'
-          start_pageant s, r, p
+          start_pageant s, r, p, n
         else
-          start_handler s, r, p
+          start_handler s, r, p, n
         end
       end
     end
@@ -183,14 +214,34 @@ class WindowsBridge
     puts "#{DateTime.now.iso8601} [Win/#{Process.pid}] #{msg}"
   end
 
-  def start_handler(socket_name, remote_address, port)
+  def cleanup
+    File.unlink @noncefile if @noncefile
+    File.unlink @pidfile if @pidfile
+    log 'exiting'
+  end
+
+  def create_nonce(noncefile)
+    log "creating nonce in noncefile #{noncefile}" if @verbose
+    nonce = Random.new.bytes(16)
+    File.write(noncefile, nonce)
+    nonce
+  end
+
+  def start_handler(socket_name, remote_address, port, nonce)
     socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
     log "start handler for Assuan socket #{socket_name} = #{socket_path} on port #{port}" if @verbose
     Socket.tcp_server_loop(remote_address, port) do |sock, client_addrinfo|
-      log 'got bridge connect request' if @verbose
+      log "got bridge connect request on port #{port} for #{socket_name}" if @verbose
       Thread.new do
-        gpg_agent = connect_to_agent_assuan_socket socket_path
         begin
+          wsl_bridge_nonce = sock.recv 16
+          if wsl_bridge_nonce != nonce
+            log "received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"
+            Thread.exit
+          else
+            log "got correct nonce on port #{port} for #{socket_name}" if @verbose
+          end
+          gpg_agent = connect_to_agent_assuan_socket socket_path
           loop = true
           while loop
             ready = IO.select([sock, gpg_agent])
@@ -216,16 +267,16 @@ class WindowsBridge
           end
         ensure
           log 'closing sockets' if @verbose
-          gpg_agent.close
+          gpg_agent.close if gpg_agent
           sock.close
         end
       end
     end
   end
 
-  def start_pageant(socket_name, remote_address, port)
+  def start_pageant(socket_name, remote_address, port, nonce)
     require 'net/ssh'
-    log "start Pageant agent on port #{port}" if @verbose
+    log "start Pageant agent on port #{port} for #{socket_name}" if @verbose
     pageant = Net::SSH::Authentication::Pageant::Socket.open
     server = TCPServer.new remote_address, port
     connections = []
@@ -233,8 +284,16 @@ class WindowsBridge
       ready = IO.select([server] + connections)
       readable = ready[0]
       if readable.include?(server)
-        log 'got bridge connect request' if @verbose
+        log "got bridge connect request on port #{port} for #{socket_name}" if @verbose
         sock = server.accept
+        wsl_bridge_nonce = sock.recv 16
+        if wsl_bridge_nonce != nonce
+          log "received wrong nonce from WSL bridge on port #{port} for #{socket_name}"
+          sock.close
+          next
+        else
+          log "got correct nonce on port #{port} for #{socket_name}" if @verbose
+        end
         connections << sock
         readable.delete server
       end
@@ -350,11 +409,12 @@ end
 
 options = {
   enable_ssh_support: false,
+  daemon: false,
   remote_address: '127.0.0.1',
   port: FIRST_PORT,
+  noncefile: nil,
   logfile: nil,
   pidfile: nil,
-  daemon: false,
   verbose: false,
   windows_bridge: false,
   windows_address: '0.0.0.0',
@@ -368,25 +428,28 @@ OptionParser.new do |opts|
   opts.on('-s', '--[no-]enable-ssh-support', 'Enable proxying of gpg-agent SSH sockets') do |v|
     options[:enable_ssh_support] = v
   end
+  opts.on('-d', '--[no-]daemon', 'Run as a daemon in the background') do |v|
+    options[:daemon] = v
+  end
   opts.on('-r', '--remote-address IPADDR', String, 'The remote address of the Windows bridge component. Needed for WSL2. [127.0.0.1]') do |v|
     options[:remote_address] = v
   end
   opts.on('-p', '--port PORT', Integer, 'The first port (of three or four) to use for proxying sockets') do |v|
     options[:port] = v
   end
+  opts.on('-n', '--noncefile PATH', String, 'The nonce file path (defaults to file in Windows gpg homedir)') do |v|
+    options[:noncefile] = v
+  end
   opts.on('-l', '--logfile PATH', String, 'The log file path') do |v|
     options[:logfile] = v
   end
-  opts.on('-d', '--[no-]daemon', 'Run as a daemon in the background') do |v|
-    options[:daemon] = v
-  end
-  opts.on('-p', '--pidfile PATH', String, 'The PID file path') do |v|
+  opts.on('-i', '--pidfile PATH', String, 'The PID file path') do |v|
     options[:pidfile] = v
   end
   opts.on('-v', '--[no-]verbose', 'Verbose logging') do |v|
     options[:verbose] = v
   end
-  opts.on('-W', '--[no-]windows-bridge', 'Start the Windows bridge (used by the WSL bridge))') do |v|
+  opts.on('-W', '--[no-]windows-bridge', 'Start the Windows bridge (used by the WSL bridge)') do |v|
     options[:windows_bridge] = v
   end
   opts.on('-R', '--windows-address IPADDR', String, 'The IP address of the Windows bridge. [0.0.0.0]') do |v|
@@ -395,7 +458,7 @@ OptionParser.new do |opts|
   opts.on('-L', '--windows-logfile PATH', String, 'The log file path of the Windows bridge') do |v|
     options[:windows_logfile] = v
   end
-  opts.on('-P', '--windows-pidfile PATH', String, 'The PID file path of the Windows bridge') do |v|
+  opts.on('-I', '--windows-pidfile PATH', String, 'The PID file path of the Windows bridge') do |v|
     options[:windows_pidfile] = v
   end
   opts.on('-h', '--help', 'Prints this help') do
@@ -404,18 +467,55 @@ OptionParser.new do |opts|
   end
 end.parse!
 
+@windows_bridge = options[:windows_bridge]
+
+def log(msg)
+  puts "#{DateTime.now.iso8601} [#{@windows_bridge ? 'Win' : 'WSL'}/#{Process.pid}] #{msg}"
+end
+
+unless @windows_bridge
+  require 'ptools'
+  unless File.which('ruby.exe')
+    log "Error: cannot find ruby.exe in the PATH: #{ENV['PATH']}"
+    exit 2
+  end
+  unless File.which('gpgconf.exe')
+    log "Error: cannot find gpgconf.exe in the PATH: #{ENV['PATH']}"
+    exit 2
+  end
+  unless File.which('gpg-agent.exe')
+    log "Error: cannot find gpg-agent.exe in the PATH: #{ENV['PATH']}"
+    exit 2
+  end
+end
+
+if options[:noncefile].nil?
+  begin
+    win_gpghome = %x[gpgconf.exe --list-dirs homedir].chomp
+    win_noncefile = win_gpghome + '\gpgbridge.nonce'
+    if @windows_bridge
+      options[:noncefile] = win_noncefile
+    else
+      options[:noncefile] = %x[wslpath -u '#{win_noncefile}'].chomp
+    end
+  rescue StandardError => e
+    $stderr.puts "Error constructing path to noncefile: #{e.inspect}"
+    exit 1
+  end
+end
+
 if options[:pidfile] && File.exist?(options[:pidfile])
   pid = File.read(options[:pidfile]).chomp.to_i
   p = Sys::ProcTable.ps(pid: pid)
   if p && p.cmdline =~ /ruby.*gpgbridge\.rb/
-    puts "#{DateTime.now.iso8601} [#{options[:windows_bridge] ? 'Win' : 'WSL'}/#{Process.pid}] detected gpgbridge.rb running as pid #{pid}, exiting" if options[:verbose]
+    log "detected gpgbridge.rb running as pid #{pid}, exiting" if options[:verbose]
     exit 0
   end
 end
 
 if options[:daemon]
   if options[:pidfile].nil?
-    puts 'Missing pidfile argument'
+    $stderr.puts 'Missing pidfile argument'
     exit 1
   end
   daemonize
@@ -423,7 +523,6 @@ if options[:daemon]
     redirect_std_in_out options[:logfile]
   else
     suppress_std_in_out
-    options[:verbose] = false
   end
 else
   redirect_std_in_out(options[:logfile]) if options[:logfile]
@@ -431,7 +530,8 @@ end
 
 File.write(options[:pidfile], Process.pid.to_s) if options[:pidfile]
 
-puts "#{DateTime.now.iso8601} [#{options[:windows_bridge] ? 'Win' : 'WSL'}/#{Process.pid}] starting gpgbridge" if options[:verbose]
+log "starting gpgbridge" if options[:verbose]
+log "using noncefile #{options[:noncefile]}" if options[:verbose]
 
 # Create the list of gpg sockets and corresponding bridge ports
 first_port = options[:port]
@@ -441,7 +541,7 @@ socket_names = [['agent-socket', first_port],
 socket_names << ['agent-ssh-socket', first_port+3] if options[:enable_ssh_support]
 options[:socket_names] = socket_names
 
-if options[:windows_bridge]
+if @windows_bridge
   Dir.chdir File.dirname(__FILE__)
   WindowsBridge.new(options).run
 else
