@@ -76,7 +76,7 @@ class WslBridge
     opts += ['--pidfile', options[:windows_pidfile]] if options[:windows_pidfile]
     opts += ['--enable-ssh-support'] if options[:enable_ssh_support]
     opts += ['--verbose'] if options[:verbose]
-    
+
     winpath = %x[wslpath -w '#{__FILE__}'].chomp
 
     @winbridge = Process.fork do
@@ -145,7 +145,7 @@ class WslBridge
       end
     end
   end
-  
+
   def get_nonce(noncefile)
     unless File.exist? noncefile
       log "missing noncefile #{noncefile}"
@@ -284,6 +284,7 @@ class WindowsBridge
     while true
       ready = IO.select([server] + connections)
       readable = ready[0]
+
       if readable.include?(server)
         log "got bridge connect request on port #{port} for #{socket_name}" if @verbose
         sock = server.accept
@@ -298,54 +299,55 @@ class WindowsBridge
         connections << sock
         readable.delete server
       end
+
       readable.each do |sock|
         begin
           #log 'msg from bridge' if @verbose
           msg = sock.recv BUFSIZ
-          #log 'sock ->'
-          if msg.length > 0
-            tries = 10
-            begin
-              pageant.send msg, 0
-              #log '-> agent'
-            rescue Net::SSH::Exception => se
-              if se.message == 'Message failed with error: 1460' # 1460 = ERROR_TIMEOUT
-                log "send to pageant timeout: #{se.inspect}"
-                tries -= 1
-                retry if tries > 0
-              end
-              log "send to pageant exception: #{se.inspect}"              
-            end
-            
-            tries = 10
-            resp = ''
-            begin
-              resp = pageant.read BUFSIZ
-              #log '<- agent'
-            rescue Net::SSH::Exception => se
-              if se.message == 'Message failed with error: 1460' # 1460 = ERROR_TIMEOUT
-                log "read from pageant timeout: #{se.inspect}"
-                tries -= 1
-                retry if tries > 0
-              end
-              log "read from pageant exception: #{se.inspect}"              
-            end
-            
-            if resp.length > 0
-              #log 'got resp from agent' if @verbose
-              sock.send resp, 0
-              #log 'sock <-'
-            else
-              #log 'no resp from agent' if @verbose
-              sock.send '', 0
-            end
-          else
+
+          if msg.length == 0
             log 'closing socket' if @verbose
             connections.delete sock
             sock.close
+            next
           end
+
+          tries = 3
+          begin
+            pageant.send msg, 0
+          rescue Net::SSH::Exception => se
+            if se.message == 'Message failed with error: 1460' && tries > 0
+              # ERROR_TIMEOUT
+              log 'send to pageant timeout, retrying'
+              tries -= 1
+              retry
+            elsif se.message == 'Message failed with error: 1400' && tries > 0
+              # ERROR_INVALID_WINDOW_HANDLE
+              log 'lost connection with pageant, reconnecting'
+              pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
+              tries -= 1
+              retry
+            end
+
+            log "send to pageant exception: #{se.inspect}"
+            raise
+          end
+
+          resp = pageant.read BUFSIZ
+          if resp.length > 0
+            #log 'got resp from agent' if @verbose
+            sock.send resp, 0
+          else
+            #log 'no resp from agent' if @verbose
+            sock.send '', 0
+          end
+
         rescue StandardError => e
-          log "Exception while communicating with Pageant: #{e.inspect}"
+          log "exception while communicating with pageant: #{e.inspect}"
+          log 'closing socket' if @verbose
+          connections.delete sock
+          sock.close
+
         end
       end
     end
@@ -566,29 +568,29 @@ if @windows_bridge
               filemap = 0
               ptr = nil
               id = Win.malloc_ptr(Win::SIZEOF_DWORD)
-              
+
               mapname = "PageantRequest%08x" % Win.GetCurrentThreadId()
               security_attributes = Win.get_ptr Win.get_security_attributes_for_user
-              
+
               filemap = Win.CreateFileMapping(Win::INVALID_HANDLE_VALUE,
                                               security_attributes,
                                               Win::PAGE_READWRITE, 0,
                                               AGENT_MAX_MSGLEN, mapname)
-              
+
               if filemap == 0 || filemap == Win::INVALID_HANDLE_VALUE
                 raise Net::SSH::Exception,
                       "Creation of file mapping failed with error: #{Win.GetLastError}"
               end
-              
+
               ptr = Win.MapViewOfFile(filemap, Win::FILE_MAP_WRITE, 0, 0,
                                       0)
-              
+
               if ptr.nil? || ptr.null?
                 raise Net::SSH::Exception, "Mapping of file failed"
               end
-              
+
               Win.set_ptr_data(ptr, query)
-              
+
               # using struct to achieve proper alignment and field size on 64-bit platform
               cds = Win::COPYDATASTRUCT.new(Win.malloc_ptr(Win::COPYDATASTRUCT.size))
               cds.dwData = AGENT_COPYDATA_ID
@@ -596,19 +598,19 @@ if @windows_bridge
               cds.lpData = Win.get_cstr(mapname)
               succ = Win.SendMessageTimeout(@win, Win::WM_COPYDATA, Win::NULL,
                                             cds.to_ptr, Win::SMTO_NORMAL, @timeout, id)
-              
+
               if succ > 0
                 retlen = 4 + ptr.to_s(4).unpack("N")[0]
                 res = ptr.to_s(retlen)
               else
                 raise Net::SSH::Exception, "Message failed with error: #{Win.GetLastError}"
               end
-              
+
               return res
             ensure
               Win.UnmapViewOfFile(ptr) unless ptr.nil? || ptr.null?
               Win.CloseHandle(filemap) if filemap != 0
-            end    
+            end
           end
         end
       end
