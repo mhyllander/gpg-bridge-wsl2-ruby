@@ -143,12 +143,13 @@ running in Windows.
 
 ## Known problems
 
-The first time you use ssh, gpg-agent.exe will prompt you for the PIN
-entry. The ssh command will either timeout and fail, or fail after you
-entered the PIN. The timeout is hard-coded in net-ssh.
+The net/ssh has a hard-coded timeout of 5s when communicating with Pageant.
+This does not play well when gpg-agent.exe is the Pageant server, because
+it will prompt for PIN entry before returning a response. The result is
+that ssh fails unless you are really fast with entering the PIN.
 
-Either way, if you try the ssh command again it will now work, since
-gpg-agent.exe has cached the PIN for future use.
+I have handled this by overriding some of the code in net/ssh to enable
+setting a custom timeout. The default timeout is now 30s.
 
 ## Remote Desktop
 

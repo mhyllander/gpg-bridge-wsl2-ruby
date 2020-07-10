@@ -79,8 +79,6 @@ class WslBridge
     
     winpath = %x[wslpath -w '#{__FILE__}'].chomp
 
-    log "command #{winpath} #{opts}"
-
     @winbridge = Process.fork do
       Process.setsid
       exit 0 unless Process.fork.nil?
@@ -279,9 +277,8 @@ class WindowsBridge
   end
 
   def start_pageant(socket_name, remote_address, port, nonce)
-    require 'net/ssh'
     log "start Pageant agent on port #{port} for #{socket_name}" if @verbose
-    pageant = Net::SSH::Authentication::Pageant::Socket.open
+    pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
     server = TCPServer.new remote_address, port
     connections = []
     while true
@@ -544,6 +541,80 @@ socket_names = [['agent-socket', first_port],
                 ['agent-browser-socket', first_port+2]]
 socket_names << ['agent-ssh-socket', first_port+3] if options[:enable_ssh_support]
 options[:socket_names] = socket_names
+
+if @windows_bridge
+  require 'net/ssh'
+
+  module Net
+    module SSH
+      module Authentication
+        module Pageant
+          class SocketWithTimeout < Net::SSH::Authentication::Pageant::Socket
+            # default timeout 30s
+            def self.open(timeout = 30000)
+              new timeout
+            end
+
+            def initialize(timeout)
+              @timeout = timeout
+              super()
+            end
+
+            # override to enable setting the SendMessageTimeout timeout
+            def send_query(query)
+              res = nil
+              filemap = 0
+              ptr = nil
+              id = Win.malloc_ptr(Win::SIZEOF_DWORD)
+              
+              mapname = "PageantRequest%08x" % Win.GetCurrentThreadId()
+              security_attributes = Win.get_ptr Win.get_security_attributes_for_user
+              
+              filemap = Win.CreateFileMapping(Win::INVALID_HANDLE_VALUE,
+                                              security_attributes,
+                                              Win::PAGE_READWRITE, 0,
+                                              AGENT_MAX_MSGLEN, mapname)
+              
+              if filemap == 0 || filemap == Win::INVALID_HANDLE_VALUE
+                raise Net::SSH::Exception,
+                      "Creation of file mapping failed with error: #{Win.GetLastError}"
+              end
+              
+              ptr = Win.MapViewOfFile(filemap, Win::FILE_MAP_WRITE, 0, 0,
+                                      0)
+              
+              if ptr.nil? || ptr.null?
+                raise Net::SSH::Exception, "Mapping of file failed"
+              end
+              
+              Win.set_ptr_data(ptr, query)
+              
+              # using struct to achieve proper alignment and field size on 64-bit platform
+              cds = Win::COPYDATASTRUCT.new(Win.malloc_ptr(Win::COPYDATASTRUCT.size))
+              cds.dwData = AGENT_COPYDATA_ID
+              cds.cbData = mapname.size + 1
+              cds.lpData = Win.get_cstr(mapname)
+              succ = Win.SendMessageTimeout(@win, Win::WM_COPYDATA, Win::NULL,
+                                            cds.to_ptr, Win::SMTO_NORMAL, @timeout, id)
+              
+              if succ > 0
+                retlen = 4 + ptr.to_s(4).unpack("N")[0]
+                res = ptr.to_s(retlen)
+              else
+                raise Net::SSH::Exception, "Message failed with error: #{Win.GetLastError}"
+              end
+              
+              return res
+            ensure
+              Win.UnmapViewOfFile(ptr) unless ptr.nil? || ptr.null?
+              Win.CloseHandle(filemap) if filemap != 0
+            end    
+          end
+        end
+      end
+    end
+  end
+end
 
 if @windows_bridge
   Dir.chdir File.dirname(__FILE__)
