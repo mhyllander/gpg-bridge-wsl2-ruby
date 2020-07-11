@@ -181,7 +181,7 @@ class WslBridge
 end
 
 # WindowsBridge runs in Windows. It receives requests over the network from
-# WslBridge and forwards them through the Assuan sockets to gpg-agent.exe
+# WslBridge and forwards them through the assuan sockets to gpg-agent.exe
 # from Gpg4Win. It can forward both gpg and SSH Pagent requests.
 class WindowsBridge
   def initialize(options)
@@ -198,15 +198,15 @@ class WindowsBridge
     # setup cleaup handlers
     at_exit { cleanup }
 
-    log 'start handlers' if @verbose
+    log 'start proxies' if @verbose
     remote_address = options[:remote_address]
     socket_names = options[:socket_names]
     @threads = socket_names.collect do |socket_name, port|
       Thread.start(socket_name, remote_address, port, nonce) do |s, r, p, n|
         if socket_name == 'agent-ssh-socket'
-          start_pageant s, r, p, n
+          start_pageant_proxy s, r, p, n
         else
-          start_handler s, r, p, n
+          start_assuan_proxy s, r, p, n
         end
       end
     end
@@ -229,9 +229,9 @@ class WindowsBridge
     nonce
   end
 
-  def start_handler(socket_name, remote_address, port, nonce)
+  def start_assuan_proxy(socket_name, remote_address, port, nonce)
     socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
-    log "start handler for Assuan socket #{socket_name} = #{socket_path} on port #{port}" if @verbose
+    log "start assuan socket proxy for #{socket_name} = #{socket_path} on port #{port}" if @verbose
     Socket.tcp_server_loop(remote_address, port) do |sock, client_addrinfo|
       log "got bridge connect request on port #{port} for #{socket_name}" if @verbose
       Thread.new do
@@ -276,8 +276,8 @@ class WindowsBridge
     end
   end
 
-  def start_pageant(socket_name, remote_address, port, nonce)
-    log "start Pageant agent on port #{port} for #{socket_name}" if @verbose
+  def start_pageant_proxy(socket_name, remote_address, port, nonce)
+    log "start Pageant proxy on port #{port} for #{socket_name}" if @verbose
     pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
     server = TCPServer.new remote_address, port
     connections = []
@@ -334,13 +334,8 @@ class WindowsBridge
           end
 
           resp = pageant.read BUFSIZ
-          if resp.length > 0
-            #log 'got resp from agent' if @verbose
-            sock.send resp, 0
-          else
-            #log 'no resp from agent' if @verbose
-            sock.send '', 0
-          end
+          sock.send resp, 0
+          #log 'no resp from gpg-agent pageant' if @verbose && resp.length == 0
 
         rescue StandardError => e
           log "exception while communicating with pageant: #{e.inspect}"
