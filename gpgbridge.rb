@@ -198,7 +198,7 @@ class WindowsBridge
     # setup cleaup handlers
     at_exit { cleanup }
 
-    log 'start listeners for Assuan sockets' if @verbose
+    log 'start handlers' if @verbose
     remote_address = options[:remote_address]
     socket_names = options[:socket_names]
     @threads = socket_names.collect do |socket_name, port|
@@ -316,7 +316,7 @@ class WindowsBridge
           begin
             pageant.send msg, 0
           rescue Net::SSH::Exception => se
-            if se.message == 'Message failed with error: 1460' && tries > 0
+            if se.message == 'Message failed with error: 1460' && tries > 0 
               # ERROR_TIMEOUT
               log 'send to pageant timeout, retrying'
               tries -= 1
@@ -366,7 +366,7 @@ class WindowsBridge
       end
     end
     port = port.pack('C*').to_i
-    log "assuan redirect #{socket_path} => 127.0.0.1:#{port}" if @verbose
+    log "redirect assuan socket #{socket_path} to TCP 127.0.0.1:#{port}" if @verbose
     if nonce.length != 16
       log "Error: #{socket_path} nonce length is #{nonce.length} != 16"
       exit 1
@@ -387,14 +387,19 @@ class WindowsBridge
 end
 
 def suppress_std_in_out
+  # redirect stdin to /dev/null to avoid reading from tty
   $stdin.reopen('/dev/null', 'r')
+  # redirect stdout and stderr to /dev/null
   $stderr.reopen('/dev/null', 'a')
   $stdout.reopen($stderr)
 end
 
 def redirect_std_in_out(logfile)
+  # redirect stdin to /dev/null to avoid reading from tty
   $stdin.reopen('/dev/null', 'r')
-  $stderr.reopen(logfile, 'a+')
+  # redirect stdout and stderr to logfile
+  f = File.open(logfile, 'a+', File::LOCK_UN)
+  $stderr.reopen(f)
   $stdout.reopen($stderr)
   $stdout.sync = $stderr.sync = true
 end
