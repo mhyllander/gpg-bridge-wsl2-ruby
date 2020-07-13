@@ -1,14 +1,17 @@
 #!/usr/bin/env ruby
-# gpgbridge.rb replaces the separate solutions provided by npiperelay,
-# weasel_pageant and wsl-gpg-bridge. It can also forward ssh-agent requests
-# to gpg-agent, when using PGP keys for ssh authentication. It will also
-# work with WSL2.
+# gpgbridge.rb forwards requests from gpg clients in WSL1 and WSL2 to
+# Gpg4win's gpg-agent.exe in Windows. It can also forward ssh requests to
+# gpg-agent.exe, when using a PGP key for ssh authentication.
 
-# Install gpgbridge.rb in a location reachable by Windows.
+# Install gpgbridge.rb in a suitable location in the Windows filesystem
+# that is reachable from both Windows and WSL.
+
 # Install Ruby for Windows. https://rubyinstaller.org/downloads/
-#  Ensure that the GPG and Ruby executables are in the PATH.
-# In WSL, run "sudo gem install sys-proctable ptools".
-# In Windows, start a Ruby command window, run "gem install sys-proctable net-ssh".
+#   - ensure that the GPG and Ruby executables are in the PATH.
+# In each WSL distribution:
+#   - run "sudo gem install sys-proctable ptools"
+# In Windows, start a Ruby command window:
+#   - run "gem install sys-proctable net-ssh"
 
 # For WSL2, add an inbound rule to Windows Firewall, allowing access from
 # [172.16.0.0/12, 192.168.0.0/16] to TCP ports 6910-6913.
