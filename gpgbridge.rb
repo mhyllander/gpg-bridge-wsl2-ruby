@@ -280,7 +280,7 @@ class WindowsBridge
   end
 
   def start_pageant_proxy(socket_name, remote_address, port, nonce)
-    log "start Pageant proxy on port #{port} for #{socket_name}" if @verbose
+    log "start Pageant proxy for #{socket_name} on port #{port}" if @verbose
     pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
     server = TCPServer.new remote_address, port
     connections = []
