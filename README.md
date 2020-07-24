@@ -115,9 +115,6 @@ setup.
 # Set this to true if running WSL1
 WSL2=false
 
-# Set this to true to forward ssh-agent from gpg4win
-SSH=false
-
 SCRIPT_DIR_WSL='/mnt/c/Program1/'
 # shellcheck disable=SC1003
 SCRIPT_DIR_WIN='C:\\Program1\\'
@@ -166,10 +163,10 @@ function start_gpgbridge
         cmd+=("--remote-address $(ip route | awk '/^default via / {print $3}')")
     fi
 
-    if [ "QUIET" = true ]
+    if [ "$QUIET" = true ]
     then
-        cmd+=(`>/dev/null 2>&1`)
-    endif
+        cmd+=('>/dev/null 2>&1')
+    fi
 
     printf -v _cmd '%s ' "${cmd[@]}"
 
