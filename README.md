@@ -154,11 +154,6 @@ function start_gpgbridge
         "--windows-logfile $LOGFILE_WIN" \
     )
 
-    if [ "$WSL2" = true ]
-    then
-        cmd+=("--remote-address $(ip route | awk '/^default via / {print $3}')")
-    fi
-
     if [ "$1" = 'ssh' ]
     then
         cmd+=('--enable-ssh-support')
@@ -166,14 +161,19 @@ function start_gpgbridge
         export SSH_AUTH_SOCK
     fi
 
+    if [ "$WSL2" = true ]
+    then
+        cmd+=("--remote-address $(ip route | awk '/^default via / {print $3}')")
+    fi
+
+    if [ "QUIET" = true ]
+    then
+        cmd+=(`>/dev/null 2>&1`)
+    endif
+
     printf -v _cmd '%s ' "${cmd[@]}"
 
-    if [ "$QUIET" = true ]
-    then
-        eval "$_cmd" >/dev/null 2>&1
-    else
-        eval "$_cmd"
-    fi
+    eval "$_cmd"
 }
 
 function stop_gpgbridge
