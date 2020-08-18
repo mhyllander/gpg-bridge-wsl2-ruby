@@ -65,21 +65,28 @@ that only processes that can read the nonce file can authenticate.
 In Windows, install [Ruby](https://rubyinstaller.org/downloads/). Ensure
 that both the ruby and gpg executables are in the Path.
 
-In Windows and WSL, you must install a few ruby gems:
+Unpack the gpgbridge release in a suitable location in the Windows
+filesystem that is reachable from both Windows and WSL.
 
-1. In Windows: gem install -N net-ssh sys-proctable
-2. In each WSL distribution: gem install -N ptools sys-proctable
+Install dependencies. From the unpacked gpgbridge folder, run "bundle
+install" in Windows and each WSL distribution to install the gems needed in
+each environment.
+
+Or, if you prefer to do it manually:
+
+1. In Windows: gem install -N sys-proctable net-ssh
+2. In each WSL distribution: gem install -N sys-proctable ptools
 
 Install gpgbridge.rb in a suitable location in the Windows filesystem that
 is reachable from both Windows and WSL.
 
 ## Usage
 
-In the examples below I have installed gpgbridge.rb in C:\Program1, which
-is /mnt/c/Program1 in WSL.
+In the examples below the release was unpacked in C:\Program1\gpgbridge,
+which is /mnt/c/Program1/gpgbridge in WSL.
 
 ```
-$ ruby /mnt/c/Program1/gpgbridge.rb --help
+$ ruby /mnt/c/Program1/gpgbridge/gpgbridge.rb --help
 Usage: gpgbridge.rb [options]
     -s, --[no-]enable-ssh-support    Enable proxying of gpg-agent SSH sockets
     -d, --[no-]daemon                Run as a daemon in the background
@@ -88,7 +95,7 @@ Usage: gpgbridge.rb [options]
     -n, --noncefile PATH             The nonce file path (defaults to file in Windows gpg homedir)
     -l, --logfile PATH               The log file path
     -i, --pidfile PATH               The PID file path
-    -v, --[no-]verbose               Verbose logging
+    -v, --log-level LEVEL            Logging level (DEBUG, INFO, WARN, ERROR, FATAL, UNKNOWN) [WARN]
     -W, --[no-]windows-bridge        Start the Windows bridge (used by the WSL bridge)
     -R, --windows-address IPADDR     The IP address of the Windows bridge. [0.0.0.0]
     -L, --windows-logfile PATH       The log file path of the Windows bridge
@@ -117,9 +124,9 @@ setup.
 # Set WSL2=true before running this script if you're running this from WSL2. 
 WSL2=${WSL2:-false}
 
-SCRIPT_DIR_WSL='/mnt/c/Program1/'
+SCRIPT_DIR_WSL='/mnt/c/Program1/gpgbridge'
 # shellcheck disable=SC1003
-SCRIPT_DIR_WIN='C:\\Program1\\'
+SCRIPT_DIR_WIN='C:\\Program1\\gpgbridge\\'
 
 PIDFILE_WSL="$HOME/.gpgbridge.pid"
 LOGFILE_WSL="$HOME/.gpgbridge.log"
@@ -145,7 +152,6 @@ function start_gpgbridge
     local cmd=( \
         'ruby' \
         "$SCRIPT_PATH_WSL" \
-        '--verbose' \
         '--daemon' \
         "--pidfile $PIDFILE_WSL" \
         "--logfile $LOGFILE_WSL" \
@@ -219,7 +225,7 @@ the remote host cannot access it. When that happens you need to restart
 some local services to free the Yubikey for use on the remote host.
 
 I have a Windows batch script that I run as Administrator to handle that
-situation. See [rdp_yubikey.cmd](rdp_yubikey.cmd).
+situation. See [rdp_yubikey.cmd](utils/rdp_yubikey.cmd).
 
 Alternatively, removing and re-inserting the Yubikey seems to let RDP grab
 the smartcard.
