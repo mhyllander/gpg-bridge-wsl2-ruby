@@ -88,7 +88,7 @@ Usage: gpgbridge.rb [options]
     -n, --noncefile PATH             The nonce file path (defaults to file in Windows gpg homedir)
     -l, --logfile PATH               The log file path
     -i, --pidfile PATH               The PID file path
-    -v, --[no-]verbose               Verbose logging
+    -v, --log-level LEVEL            Logging level (DEBUG, INFO, WARN, ERROR, FATAL, UNKNOWN) [WARN]
     -W, --[no-]windows-bridge        Start the Windows bridge (used by the WSL bridge)
     -R, --windows-address IPADDR     The IP address of the Windows bridge. [0.0.0.0]
     -L, --windows-logfile PATH       The log file path of the Windows bridge
@@ -145,7 +145,6 @@ function start_gpgbridge
     local cmd=( \
         'ruby' \
         "$SCRIPT_PATH_WSL" \
-        '--verbose' \
         '--daemon' \
         "--pidfile $PIDFILE_WSL" \
         "--logfile $LOGFILE_WSL" \
@@ -219,7 +218,7 @@ the remote host cannot access it. When that happens you need to restart
 some local services to free the Yubikey for use on the remote host.
 
 I have a Windows batch script that I run as Administrator to handle that
-situation. See [rdp_yubikey.cmd](rdp_yubikey.cmd).
+situation. See [rdp_yubikey.cmd](utils/rdp_yubikey.cmd).
 
 Alternatively, removing and re-inserting the Yubikey seems to let RDP grab
 the smartcard.
