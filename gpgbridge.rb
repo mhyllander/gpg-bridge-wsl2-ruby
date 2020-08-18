@@ -3,15 +3,15 @@
 # Gpg4win's gpg-agent.exe in Windows. It can also forward ssh requests to
 # gpg-agent.exe, when using a PGP key for ssh authentication.
 
-# Install gpgbridge.rb in a suitable location in the Windows filesystem
-# that is reachable from both Windows and WSL.
+# Copy the gpgbridge folder to a suitable location in the Windows
+# filesystem that is reachable from both Windows and WSL.
 
 # Install Ruby for Windows. https://rubyinstaller.org/downloads/
 #   - ensure that the GPG and Ruby executables are in the PATH.
 # In each WSL distribution:
-#   - run "sudo gem install sys-proctable ptools"
+#   - run "bundle install"
 # In Windows, start a Ruby command window:
-#   - run "gem install sys-proctable net-ssh"
+#   - run "bundle install"
 
 # For WSL2, add an inbound rule to Windows Firewall, allowing access from
 # [172.16.0.0/12, 192.168.0.0/16] to TCP ports 6910-6913.
