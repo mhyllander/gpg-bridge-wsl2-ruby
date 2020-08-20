@@ -1,0 +1,42 @@
+# This is the release workflow that builds an asset and creates a release whenever a v* tag is created
+
+name: Create Release
+
+on:
+  push:
+    # Sequence of patterns matched against refs/tags
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+jobs:
+  build:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Build asset
+        run: tar zcf gpgbridge.tar.gz gpgbridge.rb Gemfile
+      
+      - name: Create release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body_path: ReleaseNotes.md
+          draft: false
+          prerelease: false
+      
+      - name: Upload asset
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./gpgbridge.tar.gz
+          asset_name: gpgbridge.tar.gz
+          asset_content_type: application/gzip
