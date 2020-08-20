@@ -396,7 +396,7 @@ def redirect_std_in_out(logfile)
   # redirect stdin to /dev/null to avoid reading from tty
   $stdin.reopen('/dev/null', 'r')
   # redirect stdout and stderr to logfile
-  f = File.open(logfile, 'a+', File::LOCK_UN)
+  f = File.open(logfile, mode: 'a', perm: 0644, flags: File::LOCK_UN)
   $stderr.reopen(f)
   $stdout.reopen($stderr)
   $stdout.sync = $stderr.sync = true
@@ -546,8 +546,8 @@ end
 # re-open the logger on the current stderr, after possibly daemonizing
 logger = get_logger options[:log_level], options[:windows_bridge]
 
-
-File.write(options[:pidfile], Process.pid.to_s) if options[:pidfile]
+# write process id to file
+File.open(options[:pidfile], mode: 'w', perm: 0644) {|f| f.puts Process.pid.to_s} if options[:pidfile]
 
 logger.info 'starting gpgbridge'
 logger.debug { "using noncefile #{options[:noncefile]}" }
