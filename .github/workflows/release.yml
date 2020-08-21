@@ -16,8 +16,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Build asset
+      - name: Build tar.gz
         run: tar zcf gpgbridge.tar.gz gpgbridge.rb Gemfile README.md ReleaseNotes.md
+      
+      - name: Build zip
+        run: zip gpgbridge.zip gpgbridge.rb Gemfile README.md ReleaseNotes.md
       
       - name: Create release
         id: create_release
@@ -31,7 +34,7 @@ jobs:
           draft: false
           prerelease: false
       
-      - name: Upload asset
+      - name: Upload tar.gz
         uses: actions/upload-release-asset@v1.0.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -40,3 +43,13 @@ jobs:
           asset_path: ./gpgbridge.tar.gz
           asset_name: gpgbridge.tar.gz
           asset_content_type: application/gzip
+
+      - name: Upload zip
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./gpgbridge.zip
+          asset_name: gpgbridge.zip
+          asset_content_type: application/zip
