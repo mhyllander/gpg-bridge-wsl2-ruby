@@ -7,13 +7,13 @@ authentication. It is especially useful when you store your PGP key on a
 Yubikey, since WSL cannot (yet) access USB devices.
 
 This tool is inspired by
-[wsl-gpg-bridge](https://github.com/Riebart/wsl-gpg-bridge), which I have
-used in WSL1 together with Gpg4win and a Yubikey.
+[wsl-gpg-bridge](https://github.com/Riebart/wsl-gpg-bridge), which works
+with WSL1 together with Gpg4win and a Yubikey.
 
-When WSL2 became available, I found that wsl-gpg-bridge did not work
-anymore. The main problem is that WSL2 distributions run in a separate VM,
-with a different IP address, and can no longer connect directly with
-gpg-agent.exe in Windows (gpg-agent.exe binds to 127.0.0.1).
+When WSL2 became available, wsl-gpg-bridge did not work anymore. The main
+problem is that WSL2 distributions run in a separate VM, with a different
+IP address, and therefore WSL2 processes can no longer connect directly
+with gpg-agent.exe in Windows (because gpg-agent.exe binds to 127.0.0.1).
 
 To solve the connection problem, this solution consists of two bridges (or
 proxy applications):
@@ -208,24 +208,27 @@ running in Windows.
 
 Net/ssh has a hard-coded timeout of 5s when communicating with Pageant.
 This does not work well when gpg-agent.exe is the Pageant server, because
-the pagent client will probably time out while gpg-agent.exe is prompting
+the Pageant client will probably time out while gpg-agent.exe is prompting
 for PIN entry. The result is that ssh fails unless you are really fast with
 entering the PIN.
 
-I have currently worked around this by overriding a function in net/ssh to
-enable setting a custom timeout. The timeout is now 30s.
+This is currently worked around this by overriding a function in net/ssh to
+enable setting a custom timeout. The timeout is now 30s. A better future
+solution would be for net/ssh to allow setting a custom timeout.
 
-## Remote Desktop
+## Tips when using Remote Desktop
 
-When you are using RDP to a remote host, RDP can redirect the local Yubikey
-smartcard to the remote host, where the remote gpg-agent.exe can access it.
+If you are using RDP to a remote host, RDP can redirect the local Yubikey
+smartcard to the remote host, so that the remote gpg-agent.exe can access
+it.
 
 Sometimes the Yubikey smartcard will be blocked on the local host so that
 the remote host cannot access it. When that happens you need to restart
 some local services to free the Yubikey for use on the remote host.
 
-I have a Windows batch script that I run as Administrator to handle that
-situation. See [rdp_yubikey.cmd](utils/rdp_yubikey.cmd).
+The [rdp_yubikey.cmd](utils/rdp_yubikey.cmd) batch command automates
+stopping and/or restarting local processes. It must be run as
+Administrator.
 
-Alternatively, removing and re-inserting the Yubikey seems to let RDP grab
-the smartcard.
+Alternatively, removing and re-inserting the Yubikey while an RDP session
+is open seems to let RDP grab the smartcard before local processes.
