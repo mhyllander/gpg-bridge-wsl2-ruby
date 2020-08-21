@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Build asset
-        run: tar zcf gpgbridge.tar.gz gpgbridge.rb Gemfile
+        run: tar zcf gpgbridge.tar.gz -C gpg-bridge-wsl2-ruby gpgbridge.rb Gemfile README.md ReleaseNotes.md
       
       - name: Create release
         id: create_release
@@ -27,7 +27,7 @@ jobs:
         with:
           tag_name: ${{ github.ref }}
           release_name: Release ${{ github.ref }}
-          body_path: ReleaseNotes.md
+          body_path: gpg-bridge-wsl2-ruby/ReleaseNotes.md
           draft: false
           prerelease: false
       
