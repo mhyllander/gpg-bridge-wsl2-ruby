@@ -1,1 +1,1 @@
-Testing release workflow for gpgbridge.
+First release of gpgbridge.
