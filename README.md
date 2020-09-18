@@ -46,19 +46,29 @@ rather, the implementation is broken). Therefore, PuTTY Pageant ssh support
 must be enabled in gpg-agent.exe. To communicate with the Pagent server,
 the Win-bridge uses [net-ssh](https://github.com/net-ssh/net-ssh).
 
-## Security
+## Firewall and Security
 
 Since WSL2 has a different IP address than the Windows host, the Windows
-firewall must allow incoming connections to the Win-bridge. Specifically it
-must allow incoming connections from 172.16.0.0/12 and 192.168.0.0/16 to
-TCP ports 6910-6913 (you can select other ports if you want).
+firewall must allow incoming connections to the Win-bridge. Specifically
+you need to add a incoming rule for the Public profile that allows
+connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports 6910-6913
+(you can select other ports if you want).
 
-To secure connections with the Win-bridge, a simple nonce authentication
-scheme similar to Assuan sockets is used. The Win-bridge stores a nonce in
-a file that should only be accessible by the user. By default it saves the
-file in the GPG home directory in Windows. The WSL-bridge reads the nonce
-from the file and sends it to the Win-bridge to authenticate. This ensures
-that only processes that can read the nonce file can authenticate.
+There may also be a general rule blocking incoming Public TCP requests to
+"Ruby interpreter (CUI) 2.7.1p83 [x64-mingw32]". If so you must disable
+this rule.
+
+To authenticate connections with the Win-bridge, a simple nonce
+authentication scheme similar to Assuan sockets is used. The Win-bridge
+stores a nonce in a file that should only be accessible by the user. By
+default it saves the file in the GPG home directory in Windows. The
+WSL-bridge reads the nonce from the file and sends it to the Win-bridge to
+authenticate.
+
+This ensures that only local processes that can read the nonce file can
+authenticate with Win-bridge. Other connections will fail, which means that
+connections from other computers on the LAN (which are most likely using an
+IP address in the permitted private ranges) will be rejected.
 
 ## Installation
 
@@ -106,8 +116,7 @@ Usage: gpgbridge.rb [options]
 ## Example bash helper functions
 
 Copy the [`gpgbridge_helper.sh`](gpgbridge_helper.sh) script to a directory
- accessible from WSL and make it (`chmod +x path/to/gpgbridge_helper.sh`).
-
+accessible from WSL and make it (`chmod +x path/to/gpgbridge_helper.sh`).
 
 Then add `path/to/gpgbridge_helper.sh` to your `~/.bash_profile`,
 `~/.bashrc`, `~/.zshrc` or similar. Add `--ssh` to enable SSH forwarding and
