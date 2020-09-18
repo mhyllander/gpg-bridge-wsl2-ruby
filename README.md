@@ -46,19 +46,29 @@ rather, the implementation is broken). Therefore, PuTTY Pageant ssh support
 must be enabled in gpg-agent.exe. To communicate with the Pagent server,
 the Win-bridge uses [net-ssh](https://github.com/net-ssh/net-ssh).
 
-## Security
+## Firewall and Security
 
 Since WSL2 has a different IP address than the Windows host, the Windows
-firewall must allow incoming connections to the Win-bridge. Specifically it
-must allow incoming connections from 172.16.0.0/12 and 192.168.0.0/16 to
-TCP ports 6910-6913 (you can select other ports if you want).
+firewall must allow incoming connections to the Win-bridge. Specifically
+you need to add a incoming rule for the Public profile that allows
+connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports 6910-6913
+(you can select other ports if you want).
 
-To secure connections with the Win-bridge, a simple nonce authentication
-scheme similar to Assuan sockets is used. The Win-bridge stores a nonce in
-a file that should only be accessible by the user. By default it saves the
-file in the GPG home directory in Windows. The WSL-bridge reads the nonce
-from the file and sends it to the Win-bridge to authenticate. This ensures
-that only processes that can read the nonce file can authenticate.
+There may also be a general rule blocking incoming Public TCP requests to
+"Ruby interpreter (CUI) 2.7.1p83 [x64-mingw32]". If so you must disable
+this rule.
+
+To authenticate connections with the Win-bridge, a simple nonce
+authentication scheme similar to Assuan sockets is used. The Win-bridge
+stores a nonce in a file that should only be accessible by the user. By
+default it saves the file in the GPG home directory in Windows. The
+WSL-bridge reads the nonce from the file and sends it to the Win-bridge to
+authenticate.
+
+This ensures that only local processes that can read the nonce file can
+authenticate with Win-bridge. Other connections will fail, which means that
+connections from other computers on the LAN (which are most likely using an
+IP address in the permitted private ranges) will be rejected.
 
 ## Installation
 
@@ -105,99 +115,15 @@ Usage: gpgbridge.rb [options]
 
 ## Example bash helper functions
 
-Copy the script below to somewhere accessible from WSL, make it executable
-(`chmod +x path/to/gpgbridge_helper.sh`).
+Copy the [`gpgbridge_helper.sh`](gpgbridge_helper.sh) script to a directory
+accessible from WSL and make it (`chmod +x path/to/gpgbridge_helper.sh`).
 
-Then add `source path/to/gpgbridge_helper.sh` to your `~/.bash_profile`,
-`~/.bashrc` or `~/.zshrc`. If you are running this from WSL 2 you should also
-add `WSL2=true` before the `source` line.
+Then add `path/to/gpgbridge_helper.sh` to your `~/.bash_profile`,
+`~/.bashrc`, `~/.zshrc` or similar. Add `--ssh` to enable SSH forwarding and
+`--wsl2` if you are running WSL2 as arguments to `gpgbridge_helper.sh`.
 
-Make sure to edit the variables in the start of the script according to your
+Make sure to edit the paths in the start of the script according to your
 setup.
-
-```bash
-#!/usr/bin/env bash
-#--------------------------------------------------------------------------
-# GPG bridging from WSL gpg to gpg4win gpg-agent.exe
-# (needed to use a Yubikey, since WSL cannot access USB devices)
-
-# Set WSL2=true before running this script if you're running this from WSL2. 
-WSL2=${WSL2:-false}
-
-SCRIPT_DIR_WSL='/mnt/c/Program1/gpgbridge'
-# shellcheck disable=SC1003
-SCRIPT_DIR_WIN='C:\\Program1\\gpgbridge\\'
-
-PIDFILE_WSL="$HOME/.gpgbridge.pid"
-LOGFILE_WSL="$HOME/.gpgbridge.log"
-
-PIDFILE_WIN="${SCRIPT_DIR_WIN}gpgbridge.pid"
-LOGFILE_WIN="${SCRIPT_DIR_WIN}gpgbridge.log"
-
-SCRIPT_FILE_NAME='gpgbridge.rb'
-
-SCRIPT_PATH_WSL="${SCRIPT_DIR_WSL}${SCRIPT_FILE_NAME}"
-
-# Set to true to redirect output to /dev/null
-QUIET=false
-
-function start_gpgbridge
-{
-    if ! command -v ruby.exe >/dev/null
-    then
-        echo 'No ruby.exe found in path'
-        return
-    fi
-
-    local cmd=( \
-        'ruby' \
-        "$SCRIPT_PATH_WSL" \
-        '--daemon' \
-        "--pidfile $PIDFILE_WSL" \
-        "--logfile $LOGFILE_WSL" \
-        "--windows-pidfile $PIDFILE_WIN" \
-        "--windows-logfile $LOGFILE_WIN" \
-    )
-
-    if [ "$1" = 'ssh' ]
-    then
-        cmd+=('--enable-ssh-support')
-        SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
-        export SSH_AUTH_SOCK
-    fi
-
-    if [ "$WSL2" = true ]
-    then
-        cmd+=("--remote-address $(ip route | awk '/^default via / {print $3}')")
-    fi
-
-    if [ "$QUIET" = true ]
-    then
-        cmd+=('>/dev/null 2>&1')
-    fi
-
-    printf -v _cmd '%s ' "${cmd[@]}"
-
-    eval "$_cmd"
-}
-
-function stop_gpgbridge
-{
-    pkill -TERM -f 'ruby.*gpgbridge\.rb'
-}
-
-function restart_gpgbridge
-{
-    stop_gpgbridge
-    sleep 1
-    start_gpgbridge "$@"
-}
-
-if [ -f "$SCRIPT_PATH_WSL" ]
-then
-    start_gpgbridge ssh
-fi
-```
 
 This will start the WSL-bridge in WSL, which will in turn start the
 Win-bridge in Windows. Note that only one WSL-bridge will be started per
