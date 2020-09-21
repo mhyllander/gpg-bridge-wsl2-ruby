@@ -1,4 +1,4 @@
-## Changes in v1.1
+## Changes in v1.2
 
-* Added a helper script (contributed by @tetov)
+* Convert the helper script into a file with shell functions to be sourced.
 * Updated Readme documentation
