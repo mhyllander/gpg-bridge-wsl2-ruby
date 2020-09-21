@@ -115,20 +115,23 @@ Usage: gpgbridge.rb [options]
 
 ## Example bash helper functions
 
-Copy the [`gpgbridge_helper.sh`](gpgbridge_helper.sh) script to a directory
-accessible from WSL and make it (`chmod +x path/to/gpgbridge_helper.sh`).
+Unpack the release file to a directory accessible from WSL.
 
-Then add `path/to/gpgbridge_helper.sh` to your `~/.bash_profile`,
-`~/.bashrc`, `~/.zshrc` or similar. Add `--ssh` to enable SSH forwarding and
-`--wsl2` if you are running WSL2 as arguments to `gpgbridge_helper.sh`.
+Edit the PATHS section in the [`gpgbridge_helper.sh`](gpgbridge_helper.sh)
+file (or set the variables before sourcing the file.)
 
-Make sure to edit the paths in the start of the script according to your
-setup.
+Add the following commands to your `~/.bash_profile`, `~/.bashrc`,
+`~/.zshrc` or similar. Add `--ssh` to enable SSH forwarding and `--wsl2` if
+you are running WSL2..
+
+  1. Source the file: `source path/to/gpgbridge_helper.sh`.
+  2. Call the start function: `start_gpgbridge [ --ssh ] [ --wsl2 ]`.
 
 This will start the WSL-bridge in WSL, which will in turn start the
 Win-bridge in Windows. Note that only one WSL-bridge will be started per
 WSL distribution, and they will all share the same single Win-bridge
-running in Windows.
+running in Windows. If you edit the `SCRIPT_DIR` path in the file, it can
+be sourced and used from all WSL distributions.
 
 ## Known and handled problems
 
