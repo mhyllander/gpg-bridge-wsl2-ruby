@@ -113,10 +113,10 @@ Usage: gpgbridge.rb [options]
     -h, --help                       Prints this help
 ```
 
-## Example bash helper functions
+## Example bash/zsh/sh helper functions
 
-Unpack the release file to a directory accessible from WSL.
-
+Unpack the release file to a suitable location in the Windows filesystem 
+that is reachable from both Windows and WSL.
 Edit the PATHS section in the [`gpgbridge_helper.sh`](gpgbridge_helper.sh)
 file (or set the variables before sourcing the file.)
 
