@@ -19,14 +19,16 @@ LOGFILE_WIN="${LOGFILE_WIN:-$SCRIPT_DIR_WSL/gpgbridge_win.log}"
 #---------------------------------------------------------------------------
 # Do not edit below this line
 
-touch "$PIDFILE_WIN" "$LOGFILE_WIN" # Needs to be created otherwise wslpath complains
+touch "$PIDFILE_WIN" "$LOGFILE_WIN"  # Needs to be created otherwise wslpath complains
 PIDFILE_WIN="$(wslpath -wa "$PIDFILE_WIN")"
 LOGFILE_WIN="$(wslpath -wa "$LOGFILE_WIN")"
 
-start_gpgbridge() {
-    if ! command -v ruby.exe >/dev/null; then
-        echo 'No ruby.exe found in path'
-        return 1
+start_gpgbridge()
+{
+    if ! command -v ruby.exe >/dev/null
+    then
+	echo 'No ruby.exe found in path'
+	return 1
     fi
 
     # Parse arguments
@@ -34,10 +36,10 @@ start_gpgbridge() {
     _parsed_args=$(getopt -a -n start_gpgbridge -o h --long ssh,wsl2,help -- "$@")
     _is_args_valid=$?
 
-    if [ ! $_is_args_valid ]; then
-        echo "Usage: start_gpgbridge [ --ssh ] [ --wsl2 ]"
-        unset _parsed_args _is_args_valid
-        exit 1
+    if [ ! $_is_args_valid ] ; then
+	echo "Usage: start_gpgbridge [ --ssh ] [ --wsl2 ]"
+	unset _parsed_args _is_args_valid
+	exit 1
     fi
 
     # Defaults for ruby arguments
@@ -45,23 +47,23 @@ start_gpgbridge() {
     _remote_ip="127.0.0.1"
 
     eval set -- "$_parsed_args"
-    while :; do
-        case "$1" in
-        --ssh)
-            _ssh_arg="--enable-ssh-support"
-            SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
-            export SSH_AUTH_SOCK
-            shift
-            ;;
-        --wsl2)
-            _remote_ip="$(ip route | awk '/^default via / {print $3}')"
-            shift
-            ;;
-        --)
-            shift
-            break
-            ;;
-        esac
+    while :
+    do
+	case "$1" in
+	    --ssh)
+        _ssh_arg="--enable-ssh-support"
+		SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+		export SSH_AUTH_SOCK
+		shift
+		;;
+	    --wsl2)
+		_remote_ip="$(ip route | awk '/^default via / {print $3}')"
+		shift
+		;;
+	    --)
+		shift
+		break
+	esac
     done
 
     ruby "$SCRIPT_DIR_WSL/gpgbridge.rb" \
@@ -76,12 +78,14 @@ start_gpgbridge() {
     unset _parsed_args _is_args_valid _ssh_arg _remote_ip
 }
 
-stop_gpgbridge() {
+stop_gpgbridge()
+{
     # Kill gpgbridge if running, else return
     pkill -TERM -f 'ruby.*gpgbridge\.rb' || return 0
 }
 
-restart_gpgbridge() {
+restart_gpgbridge()
+{
     stop_gpgbridge
     sleep 1
     start_gpgbridge "$@"
