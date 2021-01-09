@@ -42,19 +42,22 @@ start_gpgbridge()
 	exit 1
     fi
 
-    _opts=''
+    # Defaults for ruby arguments
+    _ssh_arg="--no-enable-ssh-support"
+    _remote_ip="127.0.0.1"
+
     eval set -- "$_parsed_args"
     while :
     do
 	case "$1" in
 	    --ssh)
-		_opts="$_opts --enable-ssh-support"
+        _ssh_arg="--enable-ssh-support"
 		SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
 		export SSH_AUTH_SOCK
 		shift
 		;;
 	    --wsl2)
-		_opts="$_opts --remote-address $(ip route | awk '/^default via / {print $3}')"
+		_remote_ip="$(ip route | awk '/^default via / {print $3}')"
 		shift
 		;;
 	    --)
@@ -63,8 +66,16 @@ start_gpgbridge()
 	esac
     done
 
-    ruby "$SCRIPT_DIR_WSL/gpgbridge.rb" --daemon --pidfile "$PIDFILE_WSL" --logfile "$LOGFILE_WSL" --windows-pidfile "$PIDFILE_WIN" --windows-logfile "$LOGFILE_WIN" ${_opts}
-    unset _parsed_args _is_args_valid _opts
+    ruby "$SCRIPT_DIR_WSL/gpgbridge.rb" \
+        --daemon \
+        --pidfile "$PIDFILE_WSL" \
+        --logfile "$LOGFILE_WSL" \
+        --windows-pidfile "$PIDFILE_WIN" \
+        --windows-logfile "$LOGFILE_WIN" \
+        "$_ssh_arg" \
+        --remote-address "$_remote_ip"
+
+    unset _parsed_args _is_args_valid _ssh_arg _remote_ip
 }
 
 stop_gpgbridge()
