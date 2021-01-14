@@ -42,22 +42,19 @@ start_gpgbridge()
 	exit 1
     fi
 
-    # Defaults for ruby arguments
-    _ssh_arg="--no-enable-ssh-support"
-    _remote_ip="127.0.0.1"
-
+    _opts=''
     eval set -- "$_parsed_args"
     while :
     do
 	case "$1" in
 	    --ssh)
-        _ssh_arg="--enable-ssh-support"
+		_opts="$_opts --enable-ssh-support"
 		SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
 		export SSH_AUTH_SOCK
 		shift
 		;;
 	    --wsl2)
-		_remote_ip="$(ip route | awk '/^default via / {print $3}')"
+		_opts="$_opts --remote-address $(ip route | awk '/^default via / {print $3}')"
 		shift
 		;;
 	    --)
@@ -66,16 +63,14 @@ start_gpgbridge()
 	esac
     done
 
-    ruby "$SCRIPT_DIR_WSL/gpgbridge.rb" \
-        --daemon \
-        --pidfile "$PIDFILE_WSL" \
-        --logfile "$LOGFILE_WSL" \
-        --windows-pidfile "$PIDFILE_WIN" \
-        --windows-logfile "$LOGFILE_WIN" \
-        "$_ssh_arg" \
-        --remote-address "$_remote_ip"
+    # Only applies to ZSH and command not found in (ba)sh
+    setopt shwordsplit 2>/dev/null ||
 
-    unset _parsed_args _is_args_valid _ssh_arg _remote_ip
+    ruby "$SCRIPT_DIR_WSL/gpgbridge.rb" --daemon --pidfile "$PIDFILE_WSL" --logfile "$LOGFILE_WSL" --windows-pidfile "$PIDFILE_WIN" --windows-logfile "$LOGFILE_WIN" ${_opts}
+
+    unsetopt shwordsplit 2>/dev/null ||
+
+    unset _parsed_args _is_args_valid _opts
 }
 
 stop_gpgbridge()
