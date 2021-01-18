@@ -1,4 +1,3 @@
-#!/bin/sh
 #--------------------------------------------------------------------------
 # GPG bridging from WSL gpg to gpg4win gpg-agent.exe
 # (needed to use a Yubikey, since WSL cannot access USB devices)
@@ -18,10 +17,6 @@ LOGFILE_WIN="${LOGFILE_WIN:-$SCRIPT_DIR_WSL/gpgbridge_win.log}"
 
 #---------------------------------------------------------------------------
 # Do not edit below this line
-
-touch "$PIDFILE_WIN" "$LOGFILE_WIN"  # Needs to be created otherwise wslpath complains
-PIDFILE_WIN="$(wslpath -wa "$PIDFILE_WIN")"
-LOGFILE_WIN="$(wslpath -wa "$LOGFILE_WIN")"
 
 start_gpgbridge()
 {
@@ -63,7 +58,14 @@ start_gpgbridge()
 	esac
     done
 
-    ruby "$SCRIPT_DIR_WSL/gpgbridge.rb" --daemon --pidfile "$PIDFILE_WSL" --logfile "$LOGFILE_WSL" --windows-pidfile "$PIDFILE_WIN" --windows-logfile "$LOGFILE_WIN" ${_opts}
+    # Only applies to ZSH and command not found in (ba)sh
+    setopt shwordsplit 2>/dev/null ||
+
+    touch "$PIDFILE_WIN" "$LOGFILE_WIN"  # Needs to exist otherwise wslpath complains
+    ruby "$SCRIPT_DIR_WSL/gpgbridge.rb" --daemon --pidfile "$PIDFILE_WSL" --logfile "$LOGFILE_WSL" --windows-pidfile "$(wslpath -wa "$PIDFILE_WIN")" --windows-logfile "$(wslpath -wa "$LOGFILE_WIN")" ${_opts}
+
+    unsetopt shwordsplit 2>/dev/null ||
+
     unset _parsed_args _is_args_valid _opts
 }
 
