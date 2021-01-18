@@ -1,4 +1,3 @@
-## Changes in v1.2
+## Changes in v1.3
 
-* Convert the helper script into a file with shell functions to be sourced.
-* Updated Readme documentation
+* Updates to the helper functions to support zsh.
