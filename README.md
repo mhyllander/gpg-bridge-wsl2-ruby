@@ -4,7 +4,7 @@ This utility forwards requests from gpg clients in WSL1 and WSL2 to
 [Gpg4win](https://gpg4win.org/)'s gpg-agent.exe in Windows. It can also
 forward ssh requests to gpg-agent.exe, when using a PGP key for ssh
 authentication. It is especially useful when you store your PGP key on a
-Yubikey, since WSL cannot (yet) access USB devices.
+Yubikey, since WSL cannot share access to USB devices with Windows.
 
 This tool is inspired by
 [wsl-gpg-bridge](https://github.com/Riebart/wsl-gpg-bridge), which works
@@ -28,7 +28,7 @@ gpg/ssh -> (Unix socket) WSL-bridge ->
 WSL2:
 
 ```
-gpg/ssh -> (Unix socket) WSL-bridge -> (Windows Firewall) ->
+gpg/ssh -> (Unix socket) WSL-bridge -> [Windows Firewall] ->
     -> (TCP socket) Win-bridge -> (TCP/Assuan socket) gpg-agent.exe
 ```
 
@@ -42,33 +42,33 @@ connecting. The Win-bridge reads the Assuan socket files and connects
 directly with gpg-agent.exe (except for the ssh-agent socket).
 
 Gpg4win's gpg-agent.exe does not currently support standard ssh-agent (or
-rather, the implementation is broken). Therefore, PuTTY Pageant ssh support
-must be enabled in gpg-agent.exe. To communicate with the Pagent server,
-the Win-bridge uses [net-ssh](https://github.com/net-ssh/net-ssh).
+rather, the implementation is broken). Therefore, Pageant ssh support must
+be enabled in gpg-agent.exe. To communicate with the Pagent server, the
+Win-bridge uses [net-ssh](https://github.com/net-ssh/net-ssh).
 
 ## Firewall and Security
 
 Since WSL2 has a different IP address than the Windows host, the Windows
-firewall must allow incoming connections to the Win-bridge. Specifically
-you need to add a incoming rule for the Public profile that allows
-connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports 6910-6913
-(you can select other ports if you want).
+firewall must allow incoming connections to the Win-bridge. There is
+probably a general rule that denys incoming Public TCP requests to "Ruby
+interpreter (CUI) 2.7.1p83 [x64-mingw32]". You will need to disable this
+rule, and instead add a rule that allows incoming traffic to certain ports.
 
-There may also be a general rule blocking incoming Public TCP requests to
-"Ruby interpreter (CUI) 2.7.1p83 [x64-mingw32]". If so you must disable
-this rule.
+Specifically, you need to add a incoming rule for the Public profile that
+allows connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports
+6910-6913 (you can select other ports if you want).
 
-To authenticate connections with the Win-bridge, a simple nonce
-authentication scheme similar to Assuan sockets is used. The Win-bridge
-stores a nonce in a file that should only be accessible by the user. By
-default it saves the file in the GPG home directory in Windows. The
-WSL-bridge reads the nonce from the file and sends it to the Win-bridge to
-authenticate.
+The private IP address ranges listed above are used by WSL2, but probably
+also by computers on your local LAN. To limit access to the Win-bridge, a
+simple nonce authentication scheme similar to Assuan sockets is used. The
+Win-bridge stores a nonce in a file that should only be accessible by the
+user. By default it saves the file in the GPG home directory in Windows.
+The WSL-bridge reads the nonce from the file and sends it to the Win-bridge
+to authenticate.
 
 This ensures that only local processes that can read the nonce file can
 authenticate with Win-bridge. Other connections will fail, which means that
-connections from other computers on the LAN (which are most likely using an
-IP address in the permitted private ranges) will be rejected.
+connections from other computers on the LAN will be rejected.
 
 ## Installation
 
@@ -87,12 +87,9 @@ Or, if you prefer to do it manually:
 1. In Windows: gem install -N sys-proctable net-ssh
 2. In each WSL distribution: gem install -N sys-proctable ptools
 
-Install gpgbridge.rb in a suitable location in the Windows filesystem that
-is reachable from both Windows and WSL.
-
 ## Usage
 
-In the examples below the release was unpacked in C:\Program1\gpgbridge,
+In the example below the release was unpacked in C:\Program1\gpgbridge,
 which is /mnt/c/Program1/gpgbridge in WSL.
 
 ```
@@ -117,12 +114,15 @@ Usage: gpgbridge.rb [options]
 
 Unpack the release file to a suitable location in the Windows filesystem 
 that is reachable from both Windows and WSL.
+
 Edit the PATHS section in the [`gpgbridge_helper.sh`](gpgbridge_helper.sh)
-file (or set the variables before sourcing the file.)
+file (or set the variables before sourcing the file.) When `SCRIPT_DIR_WSL`
+is set appropriately, the helper file can be used from all WSL
+distributions.
 
 Add the following commands to your `~/.bash_profile`, `~/.bashrc`,
 `~/.zshrc` or similar. Add `--ssh` to enable SSH forwarding and `--wsl2` if
-you are running WSL2..
+you are running WSL2.
 
   1. Source the file: `source path/to/gpgbridge_helper.sh`.
   2. Call the start function: `start_gpgbridge [ --ssh ] [ --wsl2 ]`.
@@ -130,20 +130,19 @@ you are running WSL2..
 This will start the WSL-bridge in WSL, which will in turn start the
 Win-bridge in Windows. Note that only one WSL-bridge will be started per
 WSL distribution, and they will all share the same single Win-bridge
-running in Windows. If you edit the `SCRIPT_DIR` path in the file, it can
-be sourced and used from all WSL distributions.
+running in Windows.
 
-## Known and handled problems
+## Timeout during PIN entry
 
-Net/ssh has a hard-coded timeout of 5s when communicating with Pageant.
-This does not work well when gpg-agent.exe is the Pageant server, because
-the Pageant client will probably time out while gpg-agent.exe is prompting
-for PIN entry. The result is that ssh fails unless you are really fast with
-entering the PIN.
+Net/ssh normally has a hard-coded timeout of 5s when communicating with
+Pageant. This does not work well when gpg-agent.exe is the Pageant server,
+because the Pageant client will probably time out while gpg-agent.exe is
+prompting for PIN entry. The result is that ssh authentications fails
+unless you are really fast with entering the PIN.
 
-This is currently worked around this by overriding a function in net/ssh to
-enable setting a custom timeout. The timeout is now 30s. A better future
-solution would be for net/ssh to allow setting a custom timeout.
+This is currently handled by overriding a function in net/ssh to enable
+setting a custom timeout. The timeout is now set to 30s. (A better future
+solution would be for net/ssh to allow setting a custom timeout.)
 
 ## Tips when using Remote Desktop
 
@@ -152,12 +151,11 @@ smartcard to the remote host, so that the remote gpg-agent.exe can access
 it.
 
 Sometimes the Yubikey smartcard will be blocked on the local host so that
-the remote host cannot access it. When that happens you need to restart
-some local services to free the Yubikey for use on the remote host.
+the remote host cannot access it. When that happens the solution is to
+remove the Yubikey and insert it again, while an RDP session is active.
+This allows RDP to grab the smartcard.
 
-The [rdp_yubikey.cmd](utils/rdp_yubikey.cmd) batch command automates
-stopping and/or restarting local processes. It must be run as
-Administrator.
-
-Alternatively, removing and re-inserting the Yubikey while an RDP session
-is open seems to let RDP grab the smartcard before local processes.
+An alternative to re-inserting the Yubikey is to restart some local
+services to free the Yubikey for use on the remote host. The
+[rdp_yubikey.cmd](utils/rdp_yubikey.cmd) batch command automates stopping
+and/or restarting local processes. It must be run as Administrator.
