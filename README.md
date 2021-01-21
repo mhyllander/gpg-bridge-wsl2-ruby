@@ -54,7 +54,7 @@ probably a general rule that denys incoming Public TCP requests to "Ruby
 interpreter (CUI) 2.7.1p83 [x64-mingw32]". You will need to disable this
 rule, and instead add a rule that allows incoming traffic to certain ports.
 
-Specifically, you need to add a incoming rule for the Public profile that
+Specifically, you need to add an incoming rule for the Public profile that
 allows connections from 172.16.0.0/12 and 192.168.0.0/16 to TCP ports
 6910-6913 (you can select other ports if you want).
 
@@ -74,6 +74,8 @@ connections from other computers on the LAN will be rejected.
 
 In Windows, install [Ruby](https://rubyinstaller.org/downloads/). Ensure
 that both the ruby and gpg executables are in the Path.
+
+In each WSL, install ruby.
 
 Unpack the gpgbridge release in a suitable location in the Windows
 filesystem that is reachable from both Windows and WSL.
