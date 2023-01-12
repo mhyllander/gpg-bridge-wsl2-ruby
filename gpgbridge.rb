@@ -96,10 +96,16 @@ class WslBridge
       Thread.new do
         # get WindowsBridge nonce
         nonce = get_nonce noncefile
-        @logger.debug 'connect with remote'
-        winbridge = TCPSocket.new remote_address, port
-        # send the nonce to authenticate, if the nonce is wrong the connection will be closed immediately
-        winbridge.send nonce, 0
+        winbridge = nil
+        begin
+          @logger.debug 'connect with winbridge'
+          winbridge = TCPSocket.new remote_address, port
+          # send the nonce to authenticate, if the nonce is wrong the connection will be closed immediately
+          winbridge.send nonce, 0
+        rescue Errno::ETIMEDOUT => e
+          @logger.error "Exception while connecting with winbridge: #{e.inspect}"
+          Thread.exit
+        end
         @logger.debug 'connected'
         begin
           loop = true
@@ -108,20 +114,30 @@ class WslBridge
             readable = ready[0]
             if readable.include?(sock)
               @logger.debug 'msg from client'
-              msg = sock.recv BUFSIZ
-              if msg.length > 0
-                winbridge.send msg, 0
-              else
-                loop = false
+              begin
+                msg = sock.recv BUFSIZ
+                if msg.length > 0
+                  winbridge.send msg, 0
+                else
+                  loop = false
+                end
+              rescue Errno::ECONNRESET => e
+                @logger.error "Exception while receiving msg from client: #{e.inspect}"
+                Thread.exit
               end
             end
             if readable.include?(winbridge)
-              @logger.debug 'msg from bridge'
-              msg = winbridge.recv BUFSIZ
-              if msg.length > 0
-                sock.send msg, 0
-              else
-                loop = false
+              @logger.debug 'msg from winbridge'
+              begin
+                msg = winbridge.recv BUFSIZ
+                if msg.length > 0
+                  sock.send msg, 0
+                else
+                  loop = false
+                end
+              rescue Errno::ECONNRESET => e
+                @logger.error "Exception while receiving msg from winbridge: #{e.inspect}"
+                Thread.exit
               end
             end
           end
