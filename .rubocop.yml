@@ -1,2 +1,2 @@
 inherit_from:
-  - .rubocop_global.yml
+  - <%= ENV['HOME'] %>/.config/rubocop/config.yml
