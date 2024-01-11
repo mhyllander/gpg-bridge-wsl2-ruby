@@ -12,8 +12,8 @@ require 'logger'
 FIRST_PORT = 6910
 BUFSIZ = 4096
 
-# WslBridge runs in WSL. It receives requests through local sockets
-# requests from WSL clients and forwards them to WindowsBridge in Windows.
+# WslBridge runs in WSL. It receives requests from WSL clients through
+# local sockets and forwards them to WindowsBridge in Windows.
 class WslBridge
   def initialize(options, logger)
     @pidfile = options[:pidfile]
@@ -207,7 +207,7 @@ class WindowsBridge
     socket_names = options[:socket_names]
     @threads = socket_names.collect do |socket_name, port|
       Thread.start(socket_name, remote_address, port, nonce) do |s, r, p, n|
-        if socket_name == 'agent-ssh-socket'
+        if s == 'agent-ssh-socket'
           start_pageant_proxy s, r, p, n
         else
           start_assuan_proxy s, r, p, n
