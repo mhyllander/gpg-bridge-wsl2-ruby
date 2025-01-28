@@ -1,5 +1,9 @@
 # Change log
 
+## Changes in v1.5.1
+
+* bugfix
+
 ## Changes in v1.5
 
 * Verified with ruby 3.4, and updated gems.

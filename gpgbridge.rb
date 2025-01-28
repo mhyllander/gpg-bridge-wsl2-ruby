@@ -114,7 +114,7 @@ class WslBridge
               @logger.debug 'msg from client'
               begin
                 msg = sock.recv BUFSIZ
-                if msg&.empty?
+                if msg.nil? || msg.empty?
                   loop = false
                 else
                   winbridge.send msg, 0
@@ -129,7 +129,7 @@ class WslBridge
             @logger.debug 'msg from winbridge'
             begin
               msg = winbridge.recv BUFSIZ
-              if msg&.empty?
+              if msg.nil? || msg.empty?
                 loop = false
               else
                 sock.send msg, 0
@@ -247,7 +247,7 @@ class WindowsBridge
           if readable.include?(sock)
             @logger.debug 'msg from bridge'
             msg = sock.recv BUFSIZ
-            if msg&.empty?
+            if msg.nil? || msg.empty?
               loop = false
             else
               gpg_agent.send msg, 0
@@ -257,7 +257,7 @@ class WindowsBridge
 
           @logger.debug 'msg from gpg_agent'
           msg = gpg_agent.recv BUFSIZ
-          if msg&.empty?
+          if msg.nil? || msg.empty?
             loop = false
           else
             sock.send msg, 0
@@ -299,7 +299,7 @@ class WindowsBridge
         @logger.debug 'msg from bridge'
         msg = s.recv BUFSIZ
 
-        if msg&.empty?
+        if msg.nil? || msg.empty?
           @logger.debug 'closing socket'
           connections.delete s
           s.close
