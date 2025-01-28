@@ -23,11 +23,11 @@ class WslBridge
     start_windows_bridge options
 
     # setup cleaup handlers
-    at_exit { cleanup }
+    at_exit {cleanup}
 
     # stop gpg-agent if running in WSL
     @logger.info 'stop gpg-agent'
-    #%x[gpg-connect-agent killagent /bye]
+    # %x[gpg-connect-agent killagent /bye]
     %x[pkill gpg-agent]
 
     @logger.debug 'start listeners for WSL sockets'
@@ -42,7 +42,7 @@ class WslBridge
   end
 
   def cleanup
-    #stop_windows_bridge
+    # stop_windows_bridge
     File.unlink @pidfile if @pidfile
     @logger.info 'exiting'
   end
@@ -54,7 +54,7 @@ class WslBridge
 
     noncedir = File.dirname options[:noncefile]
     file = File.basename options[:noncefile]
-    noncefile = %x[wslpath -w '#{noncedir}'].chomp + '\\' + file
+    noncefile = "#{%x[wslpath -w '#{noncedir}'].chomp}\\#{file}"
     opts += ['--noncefile', noncefile]
 
     opts += ['--remote-address', options[:windows_address]] if options[:windows_address]
@@ -75,24 +75,22 @@ class WslBridge
   end
 
   def stop_windows_bridge
-    begin
-      p = Sys::ProcTable.ps(pid: @winbridge)
-      if p && p.cmdline =~ /ruby.*gpgbridge\.rb/
-        @logger.debug { "stop_windows_bridge #{@winbridge}" }
-        Process.kill 'TERM', @winbridge
-      end
-    rescue StandardError => e
-      @logger.error 'stop_windows_bridge exception'
-      @logger.error e
+    p = Sys::ProcTable.ps(pid: @winbridge)
+    if p && p.cmdline =~ /ruby.*gpgbridge\.rb/
+      @logger.debug {"stop_windows_bridge #{@winbridge}"}
+      Process.kill 'TERM', @winbridge
     end
+  rescue StandardError => e
+    @logger.error 'stop_windows_bridge exception'
+    @logger.error e
   end
 
   def start_listener(socket_name, remote_address, port, noncefile)
     socket_path = %x[gpgconf --list-dirs #{socket_name}].chomp
-    @logger.info { "start listener on WSL socket #{socket_name} = #{socket_path}" }
+    @logger.info {"start listener on WSL socket #{socket_name} = #{socket_path}"}
     File.unlink(socket_path) if File.exist?(socket_path) && File.socket?(socket_path)
-    Socket.unix_server_loop(socket_path) do |sock, client_addrinfo|
-      @logger.debug { "got connect request on WSL socket #{socket_name} = #{socket_path}" }
+    Socket.unix_server_loop(socket_path) do |sock, _client_addrinfo|
+      @logger.debug {"got connect request on WSL socket #{socket_name} = #{socket_path}"}
       Thread.new do
         # get WindowsBridge nonce
         nonce = get_nonce noncefile
@@ -116,29 +114,29 @@ class WslBridge
               @logger.debug 'msg from client'
               begin
                 msg = sock.recv BUFSIZ
-                if msg.length > 0
-                  winbridge.send msg, 0
-                else
+                if msg&.empty?
                   loop = false
+                else
+                  winbridge.send msg, 0
                 end
               rescue Errno::ECONNRESET => e
                 @logger.error "Exception while receiving msg from client: #{e.inspect}"
                 Thread.exit
               end
             end
-            if readable.include?(winbridge)
-              @logger.debug 'msg from winbridge'
-              begin
-                msg = winbridge.recv BUFSIZ
-                if msg.length > 0
-                  sock.send msg, 0
-                else
-                  loop = false
-                end
-              rescue Errno::ECONNRESET => e
-                @logger.error "Exception while receiving msg from winbridge: #{e.inspect}"
-                Thread.exit
+            next unless readable.include?(winbridge)
+
+            @logger.debug 'msg from winbridge'
+            begin
+              msg = winbridge.recv BUFSIZ
+              if msg&.empty?
+                loop = false
+              else
+                sock.send msg, 0
               end
+            rescue Errno::ECONNRESET => e
+              @logger.error "Exception while receiving msg from winbridge: #{e.inspect}"
+              Thread.exit
             end
           end
         ensure
@@ -152,7 +150,7 @@ class WslBridge
 
   def get_nonce(noncefile)
     unless File.exist? noncefile
-      @logger.error { "missing noncefile #{noncefile}" }
+      @logger.error {"missing noncefile #{noncefile}"}
       return ''
     end
     nonce = []
@@ -179,9 +177,8 @@ class WslBridge
 
   def run
     trap_signals
-    @threads.each {|t| t.join}
+    @threads.each(&:join)
   end
-
 end
 
 # WindowsBridge runs in Windows. It receives requests over the network from
@@ -200,7 +197,7 @@ class WindowsBridge
     nonce = create_nonce @noncefile
 
     # setup cleaup handlers
-    at_exit { cleanup }
+    at_exit {cleanup}
 
     @logger.debug 'start proxies'
     remote_address = options[:remote_address]
@@ -223,7 +220,7 @@ class WindowsBridge
   end
 
   def create_nonce(noncefile)
-    @logger.debug { "creating nonce in noncefile #{noncefile}" }
+    @logger.debug {"creating nonce in noncefile #{noncefile}"}
     nonce = Random.new.bytes(16)
     File.write(noncefile, nonce)
     nonce
@@ -231,121 +228,115 @@ class WindowsBridge
 
   def start_assuan_proxy(socket_name, remote_address, port, nonce)
     socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
-    @logger.info { "start assuan socket proxy for #{socket_name} = #{socket_path} on port #{port}" }
-    Socket.tcp_server_loop(remote_address, port) do |sock, client_addrinfo|
-      @logger.debug { "got bridge connect request on port #{port} for #{socket_name}" }
+    @logger.info {"start assuan socket proxy for #{socket_name} = #{socket_path} on port #{port}"}
+    Socket.tcp_server_loop(remote_address, port) do |sock, _client_addrinfo|
+      @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
       Thread.new do
-        begin
-          wsl_bridge_nonce = sock.recv 16
-          if wsl_bridge_nonce != nonce
-            @logger.error { "received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}" }
-            Thread.exit
-          else
-            @logger.info { "got correct nonce on port #{port} for #{socket_name}" }
-          end
-          gpg_agent = connect_to_agent_assuan_socket socket_path
-          loop = true
-          while loop
-            ready = IO.select([sock, gpg_agent])
-            readable = ready[0]
-            if readable.include?(sock)
-              @logger.debug 'msg from bridge'
-              msg = sock.recv BUFSIZ
-              if msg.length > 0
-                gpg_agent.send msg, 0
-              else
-                loop = false
-              end
-            end
-            if readable.include?(gpg_agent)
-              @logger.debug 'msg from gpg_agent'
-              msg = gpg_agent.recv BUFSIZ
-              if msg.length > 0
-                sock.send msg, 0
-              else
-                loop = false
-              end
-            end
-          end
-        ensure
-          @logger.debug 'closing sockets'
-          gpg_agent.close if gpg_agent
-          sock.close
+        wsl_bridge_nonce = sock.recv 16
+        if wsl_bridge_nonce != nonce
+          @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
+          Thread.exit
+        else
+          @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
         end
+        gpg_agent = connect_to_agent_assuan_socket socket_path
+        loop = true
+        while loop
+          ready = IO.select([sock, gpg_agent])
+          readable = ready[0]
+          if readable.include?(sock)
+            @logger.debug 'msg from bridge'
+            msg = sock.recv BUFSIZ
+            if msg&.empty?
+              loop = false
+            else
+              gpg_agent.send msg, 0
+            end
+          end
+          next unless readable.include?(gpg_agent)
+
+          @logger.debug 'msg from gpg_agent'
+          msg = gpg_agent.recv BUFSIZ
+          if msg&.empty?
+            loop = false
+          else
+            sock.send msg, 0
+          end
+        end
+      ensure
+        @logger.debug 'closing sockets'
+        gpg_agent&.close
+        sock.close
       end
     end
   end
 
   def start_pageant_proxy(socket_name, remote_address, port, nonce)
-    @logger.info { "start Pageant proxy for #{socket_name} on port #{port}" }
+    @logger.info {"start Pageant proxy for #{socket_name} on port #{port}"}
     pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
     server = TCPServer.new remote_address, port
     connections = []
-    while true
+    loop do
       ready = IO.select([server] + connections)
       readable = ready[0]
 
       if readable.include?(server)
-        @logger.debug { "got bridge connect request on port #{port} for #{socket_name}" }
+        @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
         sock = server.accept
         wsl_bridge_nonce = sock.recv 16
         if wsl_bridge_nonce != nonce
-          @logger.error { "received wrong nonce from WSL bridge on port #{port} for #{socket_name}" }
+          @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}"}
           sock.close
           next
         else
-          @logger.debug { "got correct nonce on port #{port} for #{socket_name}" }
+          @logger.debug {"got correct nonce on port #{port} for #{socket_name}"}
         end
         connections << sock
         readable.delete server
       end
 
-      readable.each do |sock|
-        begin
-          @logger.debug 'msg from bridge'
-          msg = sock.recv BUFSIZ
+      readable.each do |s|
+        @logger.debug 'msg from bridge'
+        msg = s.recv BUFSIZ
 
-          if msg.length == 0
-            @logger.debug 'closing socket'
-            connections.delete sock
-            sock.close
-            next
-          end
-
-          tries = 3
-          begin
-            pageant.send msg, 0
-          rescue Net::SSH::Exception => se
-            if se.message == 'Message failed with error: 1460' && tries > 0 
-              # ERROR_TIMEOUT
-              @logger.warn 'send to pageant timeout, retrying'
-              tries -= 1
-              retry
-            elsif se.message == 'Message failed with error: 1400' && tries > 0
-              # ERROR_INVALID_WINDOW_HANDLE
-              @logger.warn 'lost connection with pageant, reconnecting'
-              pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
-              tries -= 1
-              retry
-            end
-
-            @logger.error 'send to pageant exception'
-            @logger.error se
-            raise
-          end
-
-          resp = pageant.read BUFSIZ
-          sock.send resp, 0
-          @logger.warn 'no resp from gpg-agent pageant' if resp.length == 0
-
-        rescue StandardError => e
-          @logger.error 'exception while communicating with pageant'
-          @logger.error e
+        if msg&.empty?
           @logger.debug 'closing socket'
-          connections.delete sock
-          sock.close
-
+          connections.delete s
+          s.close
+          next
         end
+
+        tries = 3
+        begin
+          pageant.send msg, 0
+        rescue Net::SSH::Exception => e
+          if e.message == 'Message failed with error: 1460' && tries > 0
+            # ERROR_TIMEOUT
+            @logger.warn 'send to pageant timeout, retrying'
+            tries -= 1
+            retry
+          elsif e.message == 'Message failed with error: 1400' && tries > 0
+            # ERROR_INVALID_WINDOW_HANDLE
+            @logger.warn 'lost connection with pageant, reconnecting'
+            pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
+            tries -= 1
+            retry
+          end
+
+          @logger.error 'send to pageant exception'
+          @logger.error e
+          raise
+        end
+
+        resp = pageant.read BUFSIZ
+        s.send resp, 0
+        @logger.warn 'no resp from gpg-agent pageant' if resp.empty?
+      rescue StandardError => e
+        @logger.error 'exception while communicating with pageant'
+        @logger.error e
+        @logger.debug 'closing socket'
+        connections.delete s
+        s.close
       end
     end
   end
@@ -356,6 +347,7 @@ class WindowsBridge
     File.open(socket_path, 'rb') do |f|
       f.each_byte do |b|
         break if b == 10 # break on newline char
+
         port << b
       end
       f.each_byte do |b|
@@ -363,9 +355,9 @@ class WindowsBridge
       end
     end
     port = port.pack('C*').to_i
-    @logger.debug { "redirect assuan socket #{socket_path} to TCP 127.0.0.1:#{port}" }
+    @logger.debug {"redirect assuan socket #{socket_path} to TCP 127.0.0.1:#{port}"}
     if nonce.length != 16
-      @logger.error { "#{socket_path} nonce length is #{nonce.length} != 16" }
+      @logger.error {"#{socket_path} nonce length is #{nonce.length} != 16"}
       exit 1
     end
     gpg_agent = TCPSocket.new '127.0.0.1', port
@@ -374,12 +366,12 @@ class WindowsBridge
   end
 
   def trap_signals
-    Signal.trap('INT','SIG_IGN')
+    Signal.trap('INT', 'SIG_IGN')
   end
 
   def run
     trap_signals
-    @threads.each {|t| t.join}
+    @threads.each(&:join)
   end
 end
 
@@ -395,7 +387,7 @@ def redirect_std_in_out(logfile)
   # redirect stdin to /dev/null to avoid reading from tty
   $stdin.reopen('/dev/null', 'r')
   # redirect stdout and stderr to logfile
-  f = File.open(logfile, mode: 'a', perm: 0644, flags: File::LOCK_UN)
+  f = File.open(logfile, mode: 'a', perm: 0o644, flags: File::LOCK_UN)
   $stderr.reopen(f)
   $stdout.reopen($stderr)
   $stdout.sync = $stderr.sync = true
@@ -409,10 +401,12 @@ end
 
 def get_logger(level, windows_bridge)
   Logger.new($stderr,
-             shift_age = 'weekly',
-             level: level,
+             'weekly',
+             level:    level,
              progname: "#{windows_bridge ? 'Win' : 'WSL'}-bridge")
 end
+
+LEVELS = %w[DEBUG INFO WARN ERROR FATAL UNKNOWN].freeze
 
 # Windows bridge:
 # Binding to 0.0.0.0 (instead of options[:remote_address]) supports both WSL1 and WSL2
@@ -421,17 +415,17 @@ end
 
 options = {
   enable_ssh_support: false,
-  daemon: false,
-  remote_address: '127.0.0.1',
-  port: FIRST_PORT,
-  noncefile: nil,
-  logfile: nil,
-  pidfile: nil,
-  log_level: 'WARN',
-  windows_bridge: false,
-  windows_address: '0.0.0.0',
-  windows_logfile: nil,
-  windows_pidfile: nil,
+  daemon:             false,
+  remote_address:     '127.0.0.1',
+  port:               FIRST_PORT,
+  noncefile:          nil,
+  logfile:            nil,
+  pidfile:            nil,
+  log_level:          'WARN',
+  windows_bridge:     false,
+  windows_address:    '0.0.0.0',
+  windows_logfile:    nil,
+  windows_pidfile:    nil,
 }
 
 OptionParser.new do |opts|
@@ -459,7 +453,6 @@ OptionParser.new do |opts|
     options[:pidfile] = v
   end
 
-  LEVELS = %w[DEBUG INFO WARN ERROR FATAL UNKNOWN]
   opts.on('-v', '--log-level LEVEL', LEVELS, "Logging level (#{LEVELS.join(', ')}) [#{options[:log_level]}]") do |v|
     options[:log_level] = v
   end
@@ -489,15 +482,15 @@ logger = get_logger options[:log_level], options[:windows_bridge]
 unless @windows_bridge
   require 'ptools'
   unless File.which('ruby.exe')
-    logger.error { "cannot find ruby.exe in the PATH: #{ENV['PATH']}" }
+    logger.error {"cannot find ruby.exe in the PATH: #{ENV['PATH']}"}
     exit 2
   end
   unless File.which('gpgconf.exe')
-    logger.error { "cannot find gpgconf.exe in the PATH: #{ENV['PATH']}" }
+    logger.error {"cannot find gpgconf.exe in the PATH: #{ENV['PATH']}"}
     exit 2
   end
   unless File.which('gpg-agent.exe')
-    logger.error { "cannot find gpg-agent.exe in the PATH: #{ENV['PATH']}" }
+    logger.error {"cannot find gpg-agent.exe in the PATH: #{ENV['PATH']}"}
     exit 2
   end
 end
@@ -506,11 +499,11 @@ if options[:noncefile].nil?
   begin
     win_gpghome = %x[gpgconf.exe --list-dirs homedir].chomp
     noncefile = 'gpgbridge.nonce'
-    if @windows_bridge
-      options[:noncefile] = win_gpghome + '\\' + noncefile
-    else
-      options[:noncefile] = %x[wslpath -u '#{win_gpghome}'].chomp + '/' + noncefile
-    end
+    options[:noncefile] = if @windows_bridge
+                            "#{win_gpghome}\\#{noncefile}"
+                          else
+                            "#{%x[wslpath -u '#{win_gpghome}'].chomp}/#{noncefile}"
+                          end
   rescue StandardError => e
     logger.error 'constructing path to noncefile'
     logger.error e
@@ -522,7 +515,7 @@ if options[:pidfile] && File.exist?(options[:pidfile])
   pid = File.read(options[:pidfile]).chomp.to_i
   p = Sys::ProcTable.ps(pid: pid)
   if p && p.cmdline =~ /ruby.*gpgbridge\.rb/
-    logger.debug { "detected gpgbridge.rb running as pid #{pid}, exiting" }
+    logger.debug {"detected gpgbridge.rb running as pid #{pid}, exiting"}
     exit 0
   end
 end
@@ -538,25 +531,25 @@ if options[:daemon]
   else
     suppress_std_in_out
   end
-else
-  redirect_std_in_out(options[:logfile]) if options[:logfile]
+elsif options[:logfile]
+  redirect_std_in_out(options[:logfile])
 end
 
 # re-open the logger on the current stderr, after possibly daemonizing
 logger = get_logger options[:log_level], options[:windows_bridge]
 
 # write process id to file
-File.open(options[:pidfile], mode: 'w', perm: 0644) {|f| f.puts Process.pid.to_s} if options[:pidfile]
+File.open(options[:pidfile], mode: 'w', perm: 0o644) {|f| f.puts Process.pid.to_s} if options[:pidfile]
 
 logger.info 'starting gpgbridge'
-logger.debug { "using noncefile #{options[:noncefile]}" }
+logger.debug {"using noncefile #{options[:noncefile]}"}
 
 # Create the list of gpg sockets and corresponding bridge ports
 first_port = options[:port]
 socket_names = [['agent-socket', first_port],
-                ['agent-extra-socket', first_port+1],
-                ['agent-browser-socket', first_port+2]]
-socket_names << ['agent-ssh-socket', first_port+3] if options[:enable_ssh_support]
+                ['agent-extra-socket', first_port + 1],
+                ['agent-browser-socket', first_port + 2]]
+socket_names << ['agent-ssh-socket', first_port + 3] if options[:enable_ssh_support]
 options[:socket_names] = socket_names
 
 if @windows_bridge
@@ -579,12 +572,11 @@ if @windows_bridge
 
             # override to enable setting the SendMessageTimeout timeout
             def send_query(query)
-              res = nil
               filemap = 0
               ptr = nil
               id = Win.malloc_ptr(Win::SIZEOF_DWORD)
 
-              mapname = "PageantRequest%08x" % Win.GetCurrentThreadId()
+              mapname = format('PageantRequest%08x', Win.GetCurrentThreadId())
               security_attributes = Win.get_ptr Win.get_security_attributes_for_user
 
               filemap = Win.CreateFileMapping(Win::INVALID_HANDLE_VALUE,
@@ -592,7 +584,7 @@ if @windows_bridge
                                               Win::PAGE_READWRITE, 0,
                                               AGENT_MAX_MSGLEN, mapname)
 
-              if filemap == 0 || filemap == Win::INVALID_HANDLE_VALUE
+              if [0, Win::INVALID_HANDLE_VALUE].include?(filemap)
                 raise Net::SSH::Exception,
                       "Creation of file mapping failed with error: #{Win.GetLastError}"
               end
@@ -600,9 +592,7 @@ if @windows_bridge
               ptr = Win.MapViewOfFile(filemap, Win::FILE_MAP_WRITE, 0, 0,
                                       0)
 
-              if ptr.nil? || ptr.null?
-                raise Net::SSH::Exception, "Mapping of file failed"
-              end
+              raise Net::SSH::Exception, 'Mapping of file failed' if ptr.nil? || ptr.null?
 
               Win.set_ptr_data(ptr, query)
 
@@ -614,14 +604,12 @@ if @windows_bridge
               succ = Win.SendMessageTimeout(@win, Win::WM_COPYDATA, Win::NULL,
                                             cds.to_ptr, Win::SMTO_NORMAL, @timeout, id)
 
-              if succ > 0
-                retlen = 4 + ptr.to_s(4).unpack("N")[0]
-                res = ptr.to_s(retlen)
-              else
-                raise Net::SSH::Exception, "Message failed with error: #{Win.GetLastError}"
-              end
+              raise Net::SSH::Exception, "Message failed with error: #{Win.GetLastError}" unless succ > 0
 
-              return res
+              retlen = 4 + ptr.to_s(4).unpack1('N')
+              res = ptr.to_s(retlen)
+
+              res
             ensure
               Win.UnmapViewOfFile(ptr) unless ptr.nil? || ptr.null?
               Win.CloseHandle(filemap) if filemap != 0
