@@ -2,42 +2,47 @@ GEM
   remote: https://rubygems.org/
   specs:
     ast (2.4.2)
-    json (2.7.1)
-    language_server-protocol (3.17.0.3)
-    parallel (1.24.0)
-    parser (3.3.0.2)
+    json (2.9.1)
+    language_server-protocol (3.17.0.4)
+    logger (1.6.5)
+    parallel (1.26.3)
+    parser (3.3.7.0)
       ast (~> 2.4.1)
       racc
-    prism (0.19.0)
-    racc (1.7.3)
+    prism (1.3.0)
+    racc (1.8.1)
     rainbow (3.1.1)
-    regexp_parser (2.9.0)
-    rexml (3.2.6)
-    rubocop (1.59.0)
+    rbs (3.8.1)
+      logger
+    regexp_parser (2.10.0)
+    rubocop (1.71.0)
       json (~> 2.3)
       language_server-protocol (>= 3.17.0)
       parallel (~> 1.10)
-      parser (>= 3.2.2.4)
+      parser (>= 3.3.0.2)
       rainbow (>= 2.2.2, < 4.0)
-      regexp_parser (>= 1.8, < 3.0)
-      rexml (>= 3.2.5, < 4.0)
-      rubocop-ast (>= 1.30.0, < 2.0)
+      regexp_parser (>= 2.9.3, < 3.0)
+      rubocop-ast (>= 1.36.2, < 2.0)
       ruby-progressbar (~> 1.7)
-      unicode-display_width (>= 2.4.0, < 3.0)
-    rubocop-ast (1.30.0)
-      parser (>= 3.2.1.0)
-    rubocop-performance (1.20.2)
+      unicode-display_width (>= 2.4.0, < 4.0)
+    rubocop-ast (1.38.0)
+      parser (>= 3.3.1.0)
+    rubocop-performance (1.23.1)
       rubocop (>= 1.48.1, < 2.0)
-      rubocop-ast (>= 1.30.0, < 2.0)
-    ruby-lsp (0.13.2)
+      rubocop-ast (>= 1.31.1, < 2.0)
+    ruby-lsp (0.23.6)
       language_server-protocol (~> 3.17.0)
-      prism (>= 0.19.0, < 0.20)
-      sorbet-runtime (>= 0.5.5685)
+      prism (>= 1.2, < 2.0)
+      rbs (>= 3, < 4)
+      sorbet-runtime (>= 0.5.10782)
     ruby-progressbar (1.13.0)
-    sorbet-runtime (0.5.11188)
-    unicode-display_width (2.5.0)
+    sorbet-runtime (0.5.11784)
+    unicode-display_width (3.1.4)
+      unicode-emoji (~> 4.0, >= 4.0.4)
+    unicode-emoji (4.0.4)
 
 PLATFORMS
+  ruby
   x86_64-linux
 
 DEPENDENCIES
@@ -46,4 +51,4 @@ DEPENDENCIES
   ruby-lsp
 
 BUNDLED WITH
-   2.4.10
+   2.6.3
