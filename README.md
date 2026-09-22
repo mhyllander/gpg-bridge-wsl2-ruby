@@ -21,15 +21,15 @@ proxy applications):
 WSL1:
 
 ```
-gpg/ssh -> (Unix socket) WSL-bridge ->
-    -> (TCP socket) Win-bridge -> (TCP/Assuan socket) gpg-agent.exe
+gpg/ssh -> (Unix socket) -> WSL-bridge ->
+    -> (TCP socket) -> Win-bridge -> (Assuan/TCP socket) -> gpg-agent.exe
 ```
 
 WSL2:
 
 ```
-gpg/ssh -> (Unix socket) WSL-bridge -> [Windows Firewall] ->
-    -> (TCP socket) Win-bridge -> (TCP/Assuan socket) gpg-agent.exe
+gpg/ssh -> (Unix socket) -> WSL-bridge -> [Windows Firewall] ->
+    -> (TCP socket) -> Win-bridge -> (Assuan/TCP socket) -> gpg-agent.exe
 ```
 
 In WSL2, network traffic to Windows is external, or public. Therefore it
