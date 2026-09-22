@@ -4,7 +4,7 @@
 #
 # 1. Edit the PATHS section below (or set the variables before sourcing this file.)
 # 2. Source this file
-# 3. Call "start_gpgbridge [ --ssh ] [ --wsl2 ]".
+# 3. Call "start_gpgbridge [ --ssh ] [ --wsl2 | --wsl2-mirrored | --wsl2-nat ]".
 
 # PATHS
 SCRIPT_DIR_WSL="${SCRIPT_DIR_WSL:-/mnt/c/Program1/gpgbridge}"
@@ -28,7 +28,7 @@ start_gpgbridge()
 
     # Parse arguments
     #local _opts _parsed_args _is_args_valid
-    _parsed_args=$(getopt -a -n start_gpgbridge -o h --long ssh,wsl2,help -- "$@")
+    _parsed_args=$(getopt -a -n start_gpgbridge -o h --long ssh,wsl2,wsl2-mirrored,wsl2-nat,help -- "$@")
     _is_args_valid=$?
 
     if [ ! $_is_args_valid ] ; then
@@ -48,7 +48,11 @@ start_gpgbridge()
 		export SSH_AUTH_SOCK
 		shift
 		;;
-	    --wsl2)
+	    --wsl2|-wsl2-mirrored)
+		_opts="$_opts --windows-address 127.0.0.1"
+		shift
+		;;
+	    --wsl2-nat)
 		_opts="$_opts --remote-address $(ip route | awk '/^default via / {print $3}')"
 		shift
 		;;

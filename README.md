@@ -43,7 +43,7 @@ directly with gpg-agent.exe (except for the ssh-agent socket).
 
 Gpg4win's gpg-agent.exe does not currently support standard ssh-agent (or
 rather, the implementation is broken). Therefore, Pageant ssh support must
-be enabled in gpg-agent.exe. To communicate with the Pagent server, the
+be enabled in gpg-agent.exe. To communicate with the Pageant server, the
 Win-bridge uses [net-ssh](https://github.com/net-ssh/net-ssh).
 
 ## Firewall and Security
@@ -139,8 +139,8 @@ running in Windows.
 Net/ssh normally has a hard-coded timeout of 5s when communicating with
 Pageant. This does not work well when gpg-agent.exe is the Pageant server,
 because the Pageant client will probably time out while gpg-agent.exe is
-prompting for PIN entry. The result is that ssh authentications fails
-unless you are really fast with entering the PIN.
+prompting for PIN entry. The result is that ssh authentication fails
+unless you are really fast when entering the PIN.
 
 This is currently handled by overriding a function in net/ssh to enable
 setting a custom timeout. The timeout is now set to 30s. (A better future

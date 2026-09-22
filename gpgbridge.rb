@@ -22,7 +22,7 @@ class WslBridge
     # start WindowsBridge
     start_windows_bridge options
 
-    # setup cleaup handlers
+    # setup cleanup handlers
     at_exit {cleanup}
 
     # stop gpg-agent if running in WSL
@@ -183,7 +183,7 @@ end
 
 # WindowsBridge runs in Windows. It receives requests over the network from
 # WslBridge and forwards them through the assuan sockets to gpg-agent.exe
-# from Gpg4Win. It can forward both gpg and SSH Pagent requests.
+# from Gpg4Win. It can forward both gpg and SSH Pageant requests.
 class WindowsBridge
   def initialize(options, logger)
     @noncefile = options[:noncefile]
@@ -310,17 +310,19 @@ class WindowsBridge
         begin
           pageant.send msg, 0
         rescue Net::SSH::Exception => e
-          if e.message == 'Message failed with error: 1460' && tries > 0
-            # ERROR_TIMEOUT
-            @logger.warn 'send to pageant timeout, retrying'
-            tries -= 1
-            retry
-          elsif e.message == 'Message failed with error: 1400' && tries > 0
-            # ERROR_INVALID_WINDOW_HANDLE
-            @logger.warn 'lost connection with pageant, reconnecting'
-            pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
-            tries -= 1
-            retry
+          if tries > 0
+            if e.message == 'Message failed with error: 1460'
+              # ERROR_TIMEOUT
+              @logger.warn 'send to pageant timeout, retrying'
+              tries -= 1
+              retry
+            elsif e.message == 'Message failed with error: 1400'
+              # ERROR_INVALID_WINDOW_HANDLE
+              @logger.warn 'lost connection with pageant, reconnecting'
+              pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
+              tries -= 1
+              retry
+            end
           end
 
           @logger.error 'send to pageant exception'
