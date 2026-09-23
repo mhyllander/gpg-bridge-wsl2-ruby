@@ -354,7 +354,7 @@ class WindowsBridge
     end
     sep = bytes.index(10)
     port = bytes.slice(0, sep).pack('C*').to_i
-    nonce = bytes.slice(sep + 1, -1)
+    nonce = bytes.slice(sep + 1, bytes.length)
     @logger.debug {"redirect assuan socket #{socket_path} to TCP 127.0.0.1:#{port}"}
     if nonce.length != 16
       @logger.error {"#{socket_path} nonce length is #{nonce.length} != 16"}
