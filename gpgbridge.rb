@@ -60,13 +60,17 @@ class WslBridge
             @logger.debug 'msg from client'
             begin
               msg = sock.recv BUFSIZ
-              if msg.nil? || msg.empty?
+              @logger.debug "msg from client: (len=#{msg&.length}) #{msg}"
+              if msg.nil? # || msg.empty?
                 loop = false
               else
                 gpg_agent.send msg, 0
               end
             rescue Errno::ECONNRESET => e
               @logger.error "Exception while receiving msg from client: #{e.inspect}"
+              Thread.exit
+            rescue StandardError => e
+              @logger.error "StandardError while receiving msg from client: #{e.inspect}"
               Thread.exit
             end
           end
@@ -75,13 +79,17 @@ class WslBridge
           @logger.debug 'msg from gpg_agent'
           begin
             msg = gpg_agent.recv BUFSIZ
-            if msg.nil? || msg.empty?
+            @logger.debug "msg from gpg_agent: (len=#{msg&.length}) #{msg}"
+            if msg.nil? # || msg.empty?
               loop = false
             else
               sock.send msg, 0
             end
           rescue Errno::ECONNRESET => e
             @logger.error "Exception while receiving msg from gpg_agent: #{e.inspect}"
+            Thread.exit
+          rescue StandardError => e
+            @logger.error "StandardError while receiving msg from gpg_agent: #{e.inspect}"
             Thread.exit
           end
         end

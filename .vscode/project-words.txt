@@ -1,6 +1,8 @@
+addrinfo
 BUFSIZ
 cmdline
 COPYDATASTRUCT
+daemonizing
 filemap
 gpgbridge
 gpgconf
@@ -11,8 +13,10 @@ noncefile
 optparse
 pidfile
 proctable
+progname
 ptools
 READWRITE
 winbridge
+wslpath
 yubikey
 Yubikey
