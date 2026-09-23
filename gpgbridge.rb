@@ -204,11 +204,11 @@ class WindowsBridge
     socket_names = options[:socket_names]
     @threads = socket_names.collect do |socket_name, port|
       Thread.start(socket_name, remote_address, port, nonce) do |s, r, p, n|
-        if s == 'agent-ssh-socket'
-          start_pageant_proxy s, r, p, n
-        else
-          start_assuan_proxy s, r, p, n
-        end
+        # if s == 'agent-ssh-socket'
+        #   start_pageant_proxy s, r, p, n
+        # else
+        start_assuan_proxy s, r, p, n
+        # end
       end
     end
   end
