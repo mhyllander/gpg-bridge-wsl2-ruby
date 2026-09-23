@@ -196,7 +196,7 @@ class WindowsBridge
     # create nonce
     nonce = create_nonce @noncefile
 
-    # setup cleaup handlers
+    # setup cleanup handlers
     at_exit {cleanup}
 
     @logger.debug 'start proxies'
@@ -344,19 +344,17 @@ class WindowsBridge
   end
 
   def connect_to_agent_assuan_socket(socket_path)
-    port = []
-    nonce = []
+    # the assuan "socket" file contains a port number (ascii characters), followed by a new line character (10), then a
+    # nonce (16 bytes)
+    bytes = []
     File.open(socket_path, 'rb') do |f|
       f.each_byte do |b|
-        break if b == 10 # break on newline char
-
-        port << b
-      end
-      f.each_byte do |b|
-        nonce << b
+        bytes << b
       end
     end
-    port = port.pack('C*').to_i
+    sep = bytes.index(10)
+    port = bytes.slice(0, sep).pack('C*').to_i
+    nonce = bytes.slice(sep + 1, -1)
     @logger.debug {"redirect assuan socket #{socket_path} to TCP 127.0.0.1:#{port}"}
     if nonce.length != 16
       @logger.error {"#{socket_path} nonce length is #{nonce.length} != 16"}
