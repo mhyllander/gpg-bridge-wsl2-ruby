@@ -28,11 +28,11 @@ start_gpgbridge()
 
     # Parse arguments
     #local _opts _parsed_args _is_args_valid
-    _parsed_args=$(getopt -a -n start_gpgbridge -o h --long ssh,wsl2,wsl2-mirrored,wsl2-nat,help -- "$@")
+    _parsed_args=$(getopt -a -n start_gpgbridge -o h --long ssh,wsl1,wsl2-nat,wsl2-mirrored,help -- "$@")
     _is_args_valid=$?
 
     if [ ! $_is_args_valid ] ; then
-	echo "Usage: start_gpgbridge [ --ssh ] [ --wsl2 ]"
+	echo "Usage: start_gpgbridge [ --ssh ] [ --wsl1 | --wsl2-nat | --wsl2-mirrored ]"
 	unset _parsed_args _is_args_valid
 	exit 1
     fi
@@ -41,25 +41,29 @@ start_gpgbridge()
     eval set -- "$_parsed_args"
     while :
     do
-	case "$1" in
-	    --ssh)
-		_opts="$_opts --enable-ssh-support"
-		SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
-		export SSH_AUTH_SOCK
-		shift
-		;;
-	    --wsl2|-wsl2-mirrored)
-		_opts="$_opts --windows-address 127.0.0.1"
-		shift
-		;;
-	    --wsl2-nat)
-		_opts="$_opts --remote-address $(ip route | awk '/^default via / {print $3}')"
-		shift
-		;;
-	    --)
-		shift
-		break
-	esac
+        case "$1" in
+            --ssh)
+            _opts="$_opts --enable-ssh-support"
+            SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+            export SSH_AUTH_SOCK
+            shift
+            ;;
+            --wsl1)
+            _opts="$_opts --wsl-mode=wsl1"
+            shift
+            ;;
+            --wsl2-nat)
+            _opts="$_opts --wsl-mode=wsl2_nat"
+            shift
+            ;;
+            --wsl2-mirrored)
+            _opts="$_opts --wsl-mode=wsl2_mirrored"
+            shift
+            ;;
+            --)
+            shift
+            break
+        esac
     done
 
     # Only applies to ZSH and command not found in (ba)sh

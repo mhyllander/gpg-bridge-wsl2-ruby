@@ -12,15 +12,93 @@ require 'logger'
 FIRST_PORT = 6910
 BUFSIZ = 4096
 
-# WslBridge runs in WSL. It receives requests from WSL clients through
-# local sockets and forwards them to WindowsBridge in Windows.
-class WslBridge
+class Relay
   def initialize(options, logger)
-    @pidfile = options[:pidfile]
+    @options = options
     @logger = logger
+  end
 
-    # start WindowsBridge
-    start_windows_bridge options
+  def dial_assuan(socket_path)
+    # the assuan "socket" file contains a port number (ascii characters), followed by a new line character (10), then a
+    # nonce (16 bytes)
+    bytes = []
+    File.open(socket_path, 'rb') do |f|
+      f.each_byte do |b|
+        bytes << b
+      end
+    end
+    sep = bytes.index(10)
+    port = bytes.slice(0, sep).pack('C*').to_i
+    nonce = bytes.slice(sep + 1, bytes.length)
+    @logger.debug {"assuan socket #{socket_path} -> TCP 127.0.0.1:#{port}"}
+    if nonce.length != 16
+      @logger.error {"#{socket_path} nonce length is #{nonce.length} != 16"}
+      exit 1
+    end
+    gpg_agent = TCPSocket.new '127.0.0.1', port
+    gpg_agent.write nonce.pack('C16') # send the nonce to "authenticate"
+    gpg_agent
+  end
+
+  def relay(client, server)
+    Thread.new do
+      loop = true
+      while loop
+        ready = IO.select([client, server])
+        readable = ready[0]
+        if readable.include?(client)
+          @logger.debug 'msg from client'
+          begin
+            msg = client.recv BUFSIZ
+            @logger.debug "msg from client: (len=#{msg&.length})"
+            if msg.nil? # || msg.empty?
+              loop = false
+            else
+              server.send msg, 0
+            end
+          rescue Errno::ECONNRESET => e
+            @logger.error "Exception while receiving msg from client: #{e.inspect}"
+            Thread.exit
+          rescue StandardError => e
+            @logger.error "StandardError while receiving msg from client: #{e.inspect}"
+            Thread.exit
+          end
+        end
+
+        next unless readable.include?(server)
+
+        @logger.debug 'msg from server'
+        begin
+          msg = server.recv BUFSIZ
+          @logger.debug "msg from gpg_agent: (len=#{msg&.length})"
+          if msg.nil? # || msg.empty?
+            loop = false
+          else
+            client.send msg, 0
+          end
+        rescue Errno::ECONNRESET => e
+          @logger.error "Exception while receiving msg from gpg_agent: #{e.inspect}"
+          Thread.exit
+        rescue StandardError => e
+          @logger.error "StandardError while receiving msg from gpg_agent: #{e.inspect}"
+          Thread.exit
+        end
+      end
+    ensure
+      @logger.debug 'closing sockets'
+      client.close
+      server.close
+    end
+  end
+end
+
+# WslBridge runs in WSL. It receives requests from WSL clients through local sockets and either connects directly with
+# gpg_agent.exe using its Assuan sockets (in Windows), or relays them to WindowsBridge (in Windows).
+class WslBridge < Relay
+  def initialize(options, logger)
+    super options, logger
+
+    @pidfile = options[:pidfile]
 
     # setup cleanup handlers
     at_exit {cleanup}
@@ -30,13 +108,17 @@ class WslBridge
     # %x[gpg-connect-agent killagent /bye]
     %x[pkill gpg-agent]
 
-    @logger.debug 'start listeners for WSL sockets'
     remote_address = options[:remote_address]
     socket_names = options[:socket_names]
     noncefile = options[:noncefile]
-    @threads = socket_names.collect do |socket_name, port|
-      Thread.start(socket_name, remote_address, port, noncefile) do |s, r, p, n|
-        start_listener s, r, p, n
+
+    # start WindowsBridge if needed for relaying
+    start_windows_bridge options if socket_names.detect {|k, v| v[:type] == :relay}
+
+    # start socket listeners
+    @threads = socket_names.collect do |socket_name, config|
+      Thread.start(socket_name, remote_address, config, noncefile) do |s, r, c, n|
+        start_socket_listener s, r, c, n
       end
     end
   end
@@ -57,11 +139,12 @@ class WslBridge
     noncefile = "#{%x[wslpath -w '#{noncedir}'].chomp}\\#{file}"
     opts += ['--noncefile', noncefile]
 
+    opts += ['--wsl-mode', options[:wsl_mode]] if options[:wsl_mode]
+    opts += ['--enable-ssh-support'] if options[:enable_ssh_support]
     opts += ['--remote-address', options[:windows_address]] if options[:windows_address]
     opts += ['--port', options[:port].to_s] if options[:port]
     opts += ['--logfile', options[:windows_logfile]] if options[:windows_logfile]
     opts += ['--pidfile', options[:windows_pidfile]] if options[:windows_pidfile]
-    opts += ['--enable-ssh-support'] if options[:enable_ssh_support]
     opts += ['--log-level', options[:log_level]] if options[:log_level]
 
     winpath = %x[wslpath -w '#{__FILE__}'].chomp
@@ -85,67 +168,41 @@ class WslBridge
     @logger.error e
   end
 
-  def start_listener(socket_name, remote_address, port, noncefile)
+  def start_socket_listener(socket_name, remote_address, config, noncefile)
     socket_path = %x[gpgconf --list-dirs #{socket_name}].chomp
+    assuan_socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
+    assuan_socket_path = %x[wslpath -u '#{assuan_socket_path}'].chomp
     @logger.info {"start listener on WSL socket #{socket_name} = #{socket_path}"}
     File.unlink(socket_path) if File.exist?(socket_path) && File.socket?(socket_path)
-    Socket.unix_server_loop(socket_path) do |sock, _client_addrinfo|
+    Socket.unix_server_loop(socket_path) do |client, _client_addrinfo|
       @logger.debug {"got connect request on WSL socket #{socket_name} = #{socket_path}"}
-      Thread.new do
-        # get WindowsBridge nonce
-        nonce = get_nonce noncefile
-        winbridge = nil
-        begin
-          @logger.debug 'connect with winbridge'
-          winbridge = TCPSocket.new remote_address, port
-          # send the nonce to authenticate, if the nonce is wrong the connection will be closed immediately
-          winbridge.send nonce, 0
-        rescue Errno::ETIMEDOUT => e
-          @logger.error "Exception while connecting with winbridge: #{e.inspect}"
-          Thread.exit
-        end
+      server = if config[:type] == :relay
+                 dial_winbridge remote_address, config[:port], noncefile
+               else
+                 dial_assuan assuan_socket_path
+               end
+      if server.nil?
+        sock.close
+      else
         @logger.debug 'connected'
-        begin
-          loop = true
-          while loop
-            ready = IO.select([sock, winbridge])
-            readable = ready[0]
-            if readable.include?(sock)
-              @logger.debug 'msg from client'
-              begin
-                msg = sock.recv BUFSIZ
-                if msg.nil? || msg.empty?
-                  loop = false
-                else
-                  winbridge.send msg, 0
-                end
-              rescue Errno::ECONNRESET => e
-                @logger.error "Exception while receiving msg from client: #{e.inspect}"
-                Thread.exit
-              end
-            end
-            next unless readable.include?(winbridge)
-
-            @logger.debug 'msg from winbridge'
-            begin
-              msg = winbridge.recv BUFSIZ
-              if msg.nil? || msg.empty?
-                loop = false
-              else
-                sock.send msg, 0
-              end
-            rescue Errno::ECONNRESET => e
-              @logger.error "Exception while receiving msg from winbridge: #{e.inspect}"
-              Thread.exit
-            end
-          end
-        ensure
-          @logger.debug 'closing sockets'
-          winbridge.close
-          sock.close
-        end
+        relay client, server
       end
     end
+  end
+
+  def dial_winbridge(remote_address, port, noncefile)
+    # get WindowsBridge nonce
+    nonce = get_nonce noncefile
+    winbridge = nil
+    begin
+      @logger.debug 'connect with winbridge'
+      winbridge = TCPSocket.new remote_address, port
+      # send the nonce to authenticate, if the nonce is wrong the connection will be closed immediately
+      winbridge.send nonce, 0
+    rescue Errno::ETIMEDOUT => e
+      @logger.error "Exception while connecting with winbridge: #{e.inspect}"
+    end
+    winbridge
   end
 
   def get_nonce(noncefile)
@@ -184,11 +241,12 @@ end
 # WindowsBridge runs in Windows. It receives requests over the network from
 # WslBridge and forwards them through the assuan sockets to gpg-agent.exe
 # from Gpg4Win. It can forward both gpg and SSH Pageant requests.
-class WindowsBridge
+class WindowsBridge < Relay
   def initialize(options, logger)
+    super options, logger
+
     @noncefile = options[:noncefile]
     @pidfile = options[:pidfile]
-    @logger = logger
 
     # make sure gpg-agent.exe is running
     system 'gpg-connect-agent.exe /bye 2>nul'
@@ -201,13 +259,14 @@ class WindowsBridge
 
     @logger.debug 'start proxies'
     remote_address = options[:remote_address]
-    socket_names = options[:socket_names]
-    @threads = socket_names.collect do |socket_name, port|
-      Thread.start(socket_name, remote_address, port, nonce) do |s, r, p, n|
+    # select the sockets to relay, which depends on the WSL mode
+    socket_names = options[:socket_names].select {|_, v| v[:type] == :relay}
+    @threads = socket_names.collect do |socket_name, config|
+      Thread.start(socket_name, remote_address, config, nonce) do |s, r, c, n|
         if s == 'agent-ssh-socket'
-          start_pageant_proxy s, r, p, n
+          start_pageant_proxy s, r, c, n
         else
-          start_assuan_proxy s, r, p, n
+          start_assuan_proxy s, r, c, n
         end
       end
     end
@@ -220,149 +279,122 @@ class WindowsBridge
   end
 
   def create_nonce(noncefile)
-    @logger.debug {"creating nonce in noncefile #{noncefile}"}
     nonce = Random.new.bytes(16)
     File.write(noncefile, nonce)
+    @logger.debug {"created nonce in noncefile #{noncefile}: #{nonce.unpack('C*')}"}
     nonce
   end
 
-  def start_assuan_proxy(socket_name, remote_address, port, nonce)
+  def start_assuan_proxy(socket_name, remote_address, config, nonce)
+    port = config[:port]
     socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
     @logger.info {"start assuan socket proxy for #{socket_name} = #{socket_path} on port #{port}"}
     Socket.tcp_server_loop(remote_address, port) do |sock, _client_addrinfo|
       @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
-      Thread.new do
-        wsl_bridge_nonce = sock.recv 16
-        if wsl_bridge_nonce != nonce
-          @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
-          Thread.exit
-        else
-          @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
-        end
-        gpg_agent = connect_to_agent_assuan_socket socket_path
-        loop = true
-        while loop
-          ready = IO.select([sock, gpg_agent])
-          readable = ready[0]
-          if readable.include?(sock)
-            @logger.debug 'msg from bridge'
-            msg = sock.recv BUFSIZ
-            if msg.nil? || msg.empty?
-              loop = false
-            else
-              gpg_agent.send msg, 0
-            end
-          end
-          next unless readable.include?(gpg_agent)
-
-          @logger.debug 'msg from gpg_agent'
-          msg = gpg_agent.recv BUFSIZ
-          if msg.nil? || msg.empty?
-            loop = false
-          else
-            sock.send msg, 0
-          end
-        end
-      ensure
-        @logger.debug 'closing sockets'
-        gpg_agent&.close
+      wsl_bridge_nonce = sock.recv 16
+      if wsl_bridge_nonce != nonce
+        @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
         sock.close
+      else
+        @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
+        gpg_agent = dial_assuan socket_path
+        relay sock, gpg_agent
       end
     end
   end
 
-  def start_pageant_proxy(socket_name, remote_address, port, nonce)
+  def start_pageant_proxy(socket_name, remote_address, config, nonce)
+    port = config[:port]
     @logger.info {"start Pageant proxy for #{socket_name} on port #{port}"}
-    pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
-    server = TCPServer.new remote_address, port
-    connections = []
-    loop do
-      ready = IO.select([server] + connections)
-      readable = ready[0]
-
-      if readable.include?(server)
-        @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
-        sock = server.accept
-        wsl_bridge_nonce = sock.recv 16
-        if wsl_bridge_nonce != nonce
-          @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}"}
-          sock.close
-          next
-        else
-          @logger.debug {"got correct nonce on port #{port} for #{socket_name}"}
-        end
-        connections << sock
-        readable.delete server
-      end
-
-      readable.each do |s|
-        @logger.debug 'msg from bridge'
-        msg = s.recv BUFSIZ
-
-        if msg.nil? || msg.empty?
-          @logger.debug 'closing socket'
-          connections.delete s
-          s.close
-          next
-        end
-
-        tries = 3
-        begin
-          pageant.send msg, 0
-        rescue Net::SSH::Exception => e
-          if tries > 0
-            if e.message == 'Message failed with error: 1460'
-              # ERROR_TIMEOUT
-              @logger.warn 'send to pageant timeout, retrying'
-              tries -= 1
-              retry
-            elsif e.message == 'Message failed with error: 1400'
-              # ERROR_INVALID_WINDOW_HANDLE
-              @logger.warn 'lost connection with pageant, reconnecting'
-              pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
-              tries -= 1
-              retry
-            end
-          end
-
-          @logger.error 'send to pageant exception'
-          @logger.error e
-          raise
-        end
-
-        resp = pageant.read BUFSIZ
-        s.send resp, 0
-        @logger.warn 'no resp from gpg-agent pageant' if resp.empty?
-      rescue StandardError => e
-        @logger.error 'exception while communicating with pageant'
-        @logger.error e
-        @logger.debug 'closing socket'
-        connections.delete s
-        s.close
+    Socket.tcp_server_loop(remote_address, port) do |sock, _client_addrinfo|
+      @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
+      wsl_bridge_nonce = sock.recv 16
+      if wsl_bridge_nonce != nonce
+        @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
+        sock.close
+      else
+        @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
+        relay_pageant sock
       end
     end
   end
 
-  def connect_to_agent_assuan_socket(socket_path)
-    # the assuan "socket" file contains a port number (ascii characters), followed by a new line character (10), then a
-    # nonce (16 bytes)
-    bytes = []
-    File.open(socket_path, 'rb') do |f|
-      f.each_byte do |b|
-        bytes << b
+  def relay_pageant(client)
+    Thread.new do
+      # the pageant "socket" isn't a real socket (not an IO), can't be used in IO.select.
+      pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
+      loop do
+        ready = IO.select([client])
+        readable = ready[0]
+
+        next unless readable.include?(client)
+
+        @logger.debug 'msg from client'
+        begin
+          msg = client.recv BUFSIZ
+          @logger.debug "msg from client: (len=#{msg&.length})"
+          if msg.nil? # || msg.empty?
+            Thread.exit
+          else
+            pageant = send_pageant_response pageant, client, msg
+          end
+        rescue Errno::ECONNRESET => e
+          @logger.error "Exception while receiving msg from client: #{e.inspect}"
+          Thread.exit
+        rescue StandardError => e
+          @logger.error "StandardError while receiving msg from client: #{e.inspect}"
+          Thread.exit
+        end
       end
+    ensure
+      @logger.debug 'closing sockets'
+      client.close
+      pageant.close
     end
-    sep = bytes.index(10)
-    port = bytes.slice(0, sep).pack('C*').to_i
-    nonce = bytes.slice(sep + 1, bytes.length)
-    @logger.debug {"redirect assuan socket #{socket_path} to TCP 127.0.0.1:#{port}"}
-    if nonce.length != 16
-      @logger.error {"#{socket_path} nonce length is #{nonce.length} != 16"}
-      exit 1
+  end
+
+  def send_pageant_response(pageant, client, msg)
+    tries = 3
+    begin
+      pageant.send msg, 0
+    rescue Net::SSH::Exception => e
+      if tries > 0
+        if e.message == 'Message failed with error: 1460'
+          # ERROR_TIMEOUT
+          @logger.warn 'send to pageant timeout, retrying'
+          tries -= 1
+          retry
+        elsif e.message == 'Message failed with error: 1400'
+          # ERROR_INVALID_WINDOW_HANDLE
+          @logger.warn 'lost connection with pageant, reconnecting'
+          pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
+          tries -= 1
+          retry
+        end
+      end
+
+      @logger.error 'send to pageant exception'
+      @logger.error e
+      raise
     end
-    gpg_agent = TCPSocket.new '127.0.0.1', port
-    gpg_agent.write nonce.pack('C16') # send the nonce to "authenticate"
-    gpg_agent
+
+    begin
+      msg = pageant.read BUFSIZ
+      @logger.debug "msg from pageant: (len=#{msg&.length})"
+      if msg.nil? # || msg.empty?
+        Thread.exit
+      else
+        client.send msg, 0
+      end
+    rescue Errno::ECONNRESET => e
+      @logger.error "Exception while receiving msg from pageant: #{e.inspect}"
+      Thread.exit
+    rescue StandardError => e
+      @logger.error "StandardError while receiving msg from pageant: #{e.inspect}"
+      Thread.exit
+    end
+
+    pageant # return in case it was reconnected
   end
 
   def trap_signals
@@ -408,22 +440,33 @@ end
 
 LEVELS = %w[DEBUG INFO WARN ERROR FATAL UNKNOWN].freeze
 
-# Windows bridge:
-# Binding to 0.0.0.0 (instead of options[:remote_address]) supports both WSL1 and WSL2
-# WSL1 connects to 127.0.0.1
-# WSL2 connects to Windows VM via default gateway (using a private IP range)
+# Windows bridge
+#
+# gpg_agent.exe is listening on port 127.0.0.1 in the Windows VM.
+#
+# 1. WSL2 in NAT networking mode can connect to the Windows VM via the default gateway. The WinBridge must listen on
+#    0.0.0.0, and all gpg-agent.exe ports must be proxied.
+# 2. WSL2 in mirrored networking mode, and WSL1, can connect to gpg_agent.exe on 127.0.0.1 directly. The WinBridge is
+#    would ideally not be needed in this case, but there is an issue with the SSH socket.
+#
+# gpg_agent.exe is unfortunately not responding on the SSH socket. The workaround is to use the PuTTY Pageant protocol.
+# This means that when SSH support is enabled, the WinBridge must always be started to proxy the ssh port.
+#
+# Summary: The WinBridge must be deployed, to proxy either all sockets when WSL2 is in NAT networking mode, or proxy the
+# SSH socket in all other cases.
 
 options = {
+  wsl_mode:           'wsl2_mirrored',
+  remote_address:     '127.0.0.1',
+  windows_address:    '127.0.0.1',
   enable_ssh_support: false,
   daemon:             false,
-  remote_address:     '127.0.0.1',
   port:               FIRST_PORT,
   noncefile:          nil,
   logfile:            nil,
   pidfile:            nil,
   log_level:          'WARN',
   windows_bridge:     false,
-  windows_address:    '0.0.0.0',
   windows_logfile:    nil,
   windows_pidfile:    nil,
 }
@@ -431,13 +474,24 @@ options = {
 OptionParser.new do |opts|
   opts.banner = 'Usage: gpgbridge.rb [options]'
 
+  opts.on('-m', '--wsl-mode MODE', String, "The WSL networking mode (wsl1, wsl2_nat, wsl2_mirrored) [#{options[:wsl_mode]}]") do |v|
+    options[:wsl_mode] = v
+    case v
+    when 'wsl2_nat'
+      options[:remote_address] = Regexp.last_match(1) if %x[ip route].split("\n").grep(/^default via /).first =~ /^default via ([0-9.]+)/
+      options[:windows_address] = '0.0.0.0'
+    when 'wsl1', 'wsl2_mirrored'
+      options[:remote_address] = '127.0.0.1'
+      options[:windows_address] = '127.0.0.1'
+    else
+      warn "Unknown WSL mode: #{v}"
+      exit 1
+    end
+  end
   opts.on('-s', '--[no-]enable-ssh-support', 'Enable proxying of gpg-agent SSH sockets') do |v|
     options[:enable_ssh_support] = v
   end
-  opts.on('-d', '--[no-]daemon', 'Run as a daemon in the background') do |v|
-    options[:daemon] = v
-  end
-  opts.on('-r', '--remote-address IPADDR', String, 'The remote address of the Windows bridge component. Needed for WSL2. [127.0.0.1]') do |v|
+  opts.on('-r', '--remote-address IPADDR', String, "The remote address of the Windows bridge component [#{options[:remote_address]}]") do |v|
     options[:remote_address] = v
   end
   opts.on('-p', '--port PORT', Integer, 'The first port (of three or four) to use for proxying sockets') do |v|
@@ -453,6 +507,9 @@ OptionParser.new do |opts|
     options[:pidfile] = v
   end
 
+  opts.on('-d', '--[no-]daemon', 'Run as a daemon in the background') do |v|
+    options[:daemon] = v
+  end
   opts.on('-v', '--log-level LEVEL', LEVELS, "Logging level (#{LEVELS.join(', ')}) [#{options[:log_level]}]") do |v|
     options[:log_level] = v
   end
@@ -460,7 +517,7 @@ OptionParser.new do |opts|
   opts.on('-W', '--[no-]windows-bridge', 'Start the Windows bridge (used by the WSL bridge)') do |v|
     options[:windows_bridge] = v
   end
-  opts.on('-R', '--windows-address IPADDR', String, 'The IP address of the Windows bridge. [0.0.0.0]') do |v|
+  opts.on('-R', '--windows-address IPADDR', String, "The IP listening address of the Windows bridge [#{options[:windows_address]}]") do |v|
     options[:windows_address] = v
   end
   opts.on('-L', '--windows-logfile PATH', String, 'The log file path of the Windows bridge') do |v|
@@ -475,11 +532,11 @@ OptionParser.new do |opts|
   end
 end.parse!
 
-@windows_bridge = options[:windows_bridge]
+windows_bridge = options[:windows_bridge]
 
 logger = get_logger options[:log_level], options[:windows_bridge]
 
-unless @windows_bridge
+unless windows_bridge
   require 'ptools'
   unless File.which('ruby.exe')
     logger.error {"cannot find ruby.exe in the PATH: #{ENV['PATH']}"}
@@ -499,7 +556,7 @@ if options[:noncefile].nil?
   begin
     win_gpghome = %x[gpgconf.exe --list-dirs homedir].chomp
     noncefile = 'gpgbridge.nonce'
-    options[:noncefile] = if @windows_bridge
+    options[:noncefile] = if windows_bridge
                             "#{win_gpghome}\\#{noncefile}"
                           else
                             "#{%x[wslpath -u '#{win_gpghome}'].chomp}/#{noncefile}"
@@ -544,15 +601,21 @@ File.open(options[:pidfile], mode: 'w', perm: 0o644) {|f| f.puts Process.pid.to_
 logger.info 'starting gpgbridge'
 logger.debug {"using noncefile #{options[:noncefile]}"}
 
-# Create the list of gpg sockets and corresponding bridge ports
+# Create the map of gpg sockets and corresponding bridge ports
 first_port = options[:port]
-socket_names = [['agent-socket', first_port],
-                ['agent-extra-socket', first_port + 1],
-                ['agent-browser-socket', first_port + 2]]
-socket_names << ['agent-ssh-socket', first_port + 3] if options[:enable_ssh_support]
+access_mode = options[:wsl_mode] == 'wsl2_nat' ? :relay : :assuan
+socket_names = {
+  'agent-socket'         => { port: first_port, type: access_mode },
+  'agent-extra-socket'   => { port: first_port + 1, type: access_mode },
+  'agent-browser-socket' => { port: first_port + 2, type: access_mode },
+}
+# SSH is always :relay for the Pageant workaround
+socket_names['agent-ssh-socket'] = { port: first_port + 3, type: :relay } if options[:enable_ssh_support]
 options[:socket_names] = socket_names
+logger.debug {"ssh support #{options[:enable_ssh_support]}"}
+logger.debug {"using socket_names #{options[:socket_names]}"}
 
-if @windows_bridge
+if windows_bridge
   require 'net/ssh'
 
   module Net
@@ -621,7 +684,7 @@ if @windows_bridge
   end
 end
 
-if @windows_bridge
+if windows_bridge
   Dir.chdir File.dirname(__FILE__)
   WindowsBridge.new(options, logger).run
 else
