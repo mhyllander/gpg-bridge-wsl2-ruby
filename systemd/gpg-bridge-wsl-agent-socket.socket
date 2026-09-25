@@ -2,9 +2,12 @@
 Description=agent-socket
 
 [Socket]
-ListenSequentialPacket=%t/gnupg/S.gpg-agent
+ListenStream=%t/gnupg/S.gpg-agent
+FileDescriptorName=agent-socket
 SocketMode=0600
+DirectoryMode=0700
 Accept=no
+Service=gpg-bridge-wsl.service
 
 [Install]
 WantedBy=sockets.target

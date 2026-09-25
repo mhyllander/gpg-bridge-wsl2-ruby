@@ -50,7 +50,7 @@ class Relay
           @logger.debug 'msg from client'
           begin
             msg = client.recv BUFSIZ
-            @logger.debug "msg from client: (len=#{msg&.length})"
+            @logger.debug "msg from client: (len=#{msg&.length}) #{msg}"
             if msg.nil? # || msg.empty?
               loop = false
             else
@@ -70,17 +70,17 @@ class Relay
         @logger.debug 'msg from server'
         begin
           msg = server.recv BUFSIZ
-          @logger.debug "msg from gpg_agent: (len=#{msg&.length})"
+          @logger.debug "msg from server: (len=#{msg&.length}) #{msg}"
           if msg.nil? # || msg.empty?
             loop = false
           else
             client.send msg, 0
           end
         rescue Errno::ECONNRESET => e
-          @logger.error "Exception while receiving msg from gpg_agent: #{e.inspect}"
+          @logger.error "Exception while receiving msg from server: #{e.inspect}"
           Thread.exit
         rescue StandardError => e
-          @logger.error "StandardError while receiving msg from gpg_agent: #{e.inspect}"
+          @logger.error "StandardError while receiving msg from server: #{e.inspect}"
           Thread.exit
         end
       end
@@ -127,7 +127,7 @@ class WslBridge < Relay
                    Thread.start(socket_name, remote_address, config, noncefile, fd) do |s, r, c, n, f|
                      start_socket_listener_fd s, r, c, n, f
                    end
-                 end.compact
+                 end
                else
                  # Use traditional socket creation
                  socket_names.collect do |socket_name, config|
@@ -220,7 +220,7 @@ class WslBridge < Relay
     @logger.info {"start listener on systemd fd #{fd} for #{socket_name}"}
     assuan_socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
     assuan_socket_path = %x[wslpath -u '#{assuan_socket_path}'].chomp
-    unix_server = UNIXServer.new(fd)
+    unix_server = UNIXServer.for_fd(fd)
     unix_server.listen 5
     loop do
       client = unix_server.accept
@@ -270,15 +270,11 @@ class WslBridge < Relay
   end
 
   def systemd_enabled?
-    options[:systemd] == true
-  end
-
-  def listen_fds
-    ENV['LISTEN_FDS'].to_i
+    @options[:systemd] == true
   end
 
   def listen_names
-    names_env = ENV['LISTEN_NAMES']
+    names_env = ENV['LISTEN_FDNAMES']
     return [] if names_env.nil? || names_env.empty?
 
     names_env.split(':')
@@ -549,14 +545,7 @@ OptionParser.new do |opts|
 
   opts.on('-m', '--wsl-mode MODE', String, "The WSL networking mode (wsl1, wsl2_nat, wsl2_mirrored) [#{options[:wsl_mode]}]") do |v|
     options[:wsl_mode] = v
-    case v
-    when 'wsl2_nat'
-      options[:remote_address] = Regexp.last_match(1) if %x[ip route].split("\n").grep(/^default via /).first =~ /^default via ([0-9.]+)/
-      options[:windows_address] = '0.0.0.0'
-    when 'wsl1', 'wsl2_mirrored'
-      options[:remote_address] = '127.0.0.1'
-      options[:windows_address] = '127.0.0.1'
-    else
+    unless %w[wsl1 wsl2_nat wsl2_mirrored].include?(v)
       warn "Unknown WSL mode: #{v}"
       exit 1
     end
@@ -626,6 +615,15 @@ unless windows_bridge
     logger.error {"cannot find gpg-agent.exe in the PATH: #{ENV['PATH']}"}
     exit 2
   end
+
+  case options[:wsl_mode]
+  when 'wsl2_nat'
+    options[:remote_address] = Regexp.last_match(1) if %x[ip route].split("\n").grep(/^default via /).first =~ /^default via ([0-9.]+)/
+    options[:windows_address] = '0.0.0.0'
+  when 'wsl1', 'wsl2_mirrored'
+    options[:remote_address] = '127.0.0.1'
+    options[:windows_address] = '127.0.0.1'
+  end
 end
 
 if options[:noncefile].nil?
@@ -680,27 +678,19 @@ logger.debug {"using noncefile #{options[:noncefile]}"}
 # Create the map of gpg sockets and corresponding bridge ports
 first_port = options[:port]
 access_mode = options[:wsl_mode] == 'wsl2_nat' ? :relay : :assuan
-# For socket activation, the socket names are mapped from LISTEN_NAMES env var
-if options[:systemd]
-  listen_names = ENV['LISTEN_NAMES']&.split(':') || []
-  socket_names = {}
-  listen_names.each_with_index do |name, idx|
-    # SSH socket is special - needs relay mode
-    socket_names[name] = { port: first_port + idx, type: (name == 'agent-ssh-socket' ? :relay : access_mode) }
-  end
-  logger.warn 'SSH support enabled but no SSH listen fd found' if options[:enable_ssh_support] && !listen_names.include?('agent-ssh-socket')
-else
-  socket_names = {
-    'agent-socket'         => { port: first_port, type: access_mode },
-    'agent-extra-socket'   => { port: first_port + 1, type: access_mode },
-    'agent-browser-socket' => { port: first_port + 2, type: access_mode },
-  }
-  # SSH is always :relay for the Pageant workaround
-  socket_names['agent-ssh-socket'] = { port: first_port + 3, type: :relay } if options[:enable_ssh_support]
-end
+socket_names = {
+  'agent-socket'         => { port: first_port, type: access_mode },
+  'agent-extra-socket'   => { port: first_port + 1, type: access_mode },
+  'agent-browser-socket' => { port: first_port + 2, type: access_mode },
+}
+# SSH is always :relay for the Pageant workaround
+socket_names['agent-ssh-socket'] = { port: first_port + 3, type: :relay } if options[:enable_ssh_support]
 options[:socket_names] = socket_names
+
 logger.debug {"ssh support #{options[:enable_ssh_support]}"}
 logger.debug {"socket_names #{options[:socket_names]}"}
+logger.debug {"LISTEN_FDS #{ENV['LISTEN_FDS']}"}
+logger.debug {"LISTEN_FDNAMES #{ENV['LISTEN_FDNAMES']}"}
 
 if windows_bridge
   require 'net/ssh'

@@ -8,9 +8,8 @@ After=gpg-bridge-wsl-agent-socket.socket gpg-bridge-wsl-agent-extra-socket.socke
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/ruby /home/mhy/third-party/gpg-bridge-wsl2-ruby/gpgbridge.rb --systemd --enable-ssh-support --wsl-mode=wsl2_mirrored
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/mnt/c/Program Files/GnuPG/bin:/mnt/c/Ruby40-x64/bin:/mnt/c/Windows:/mnt/c/Windows/System32
-Environment=LISTEN_NAMES=agent-socket:agent-extra-socket:agent-browser-socket:agent-ssh-socket
+ExecStart=/usr/bin/ruby /mnt/c/Program1/gpgbridge/gpgbridge.rb --systemd --enable-ssh-support --wsl-mode=wsl2_mirrored
+Environment='PATH=/usr/local/bin:/usr/bin:/bin:/mnt/c/Program Files/GnuPG/bin:/mnt/c/Ruby40-x64/bin:/mnt/c/Windows:/mnt/c/Windows/System32'
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

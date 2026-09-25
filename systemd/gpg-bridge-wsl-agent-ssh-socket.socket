@@ -2,9 +2,12 @@
 Description=agent-ssh-socket
 
 [Socket]
-ListenSequentialPacket=%t/gnupg/S.gpg-agent.ssh
+ListenStream=%t/gnupg/S.gpg-agent.ssh
+FileDescriptorName=agent-ssh-socket
 SocketMode=0600
+DirectoryMode=0700
 Accept=no
+Service=gpg-bridge-wsl.service
 
 [Install]
 WantedBy=sockets.target
