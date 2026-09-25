@@ -116,16 +116,42 @@ class WslBridge < Relay
     start_windows_bridge options if socket_names.detect {|k, v| v[:type] == :relay}
 
     # start socket listeners
-    @threads = socket_names.collect do |socket_name, config|
-      Thread.start(socket_name, remote_address, config, noncefile) do |s, r, c, n|
-        start_socket_listener s, r, c, n
-      end
-    end
+    @threads = if systemd_enabled?
+                 # Use systemd socket activation - listen fds are passed by systemd
+                 socket_names.collect do |socket_name, config|
+                   fd = fd_for_socket_name(socket_name)
+                   if fd.nil?
+                     @logger.error "No listen fd found for socket #{socket_name}"
+                     next nil
+                   end
+                   Thread.start(socket_name, remote_address, config, noncefile, fd) do |s, r, c, n, f|
+                     start_socket_listener_fd s, r, c, n, f
+                   end
+                 end.compact
+               else
+                 # Use traditional socket creation
+                 socket_names.collect do |socket_name, config|
+                   Thread.start(socket_name, remote_address, config, noncefile) do |s, r, c, n|
+                     start_socket_listener s, r, c, n
+                   end
+                 end
+               end
   end
 
   def cleanup
     # stop_windows_bridge
     File.unlink @pidfile if @pidfile
+    # Close listen fds when using systemd socket activation
+    if systemd_enabled?
+      listen_names.each do |name|
+        fd = fd_for_socket_name(name)
+        begin
+          IO.new(fd).close if fd
+        rescue StandardError => e
+          @logger.error "Failed to close listen fd for #{name}: #{e.inspect}"
+        end
+      end
+    end
     @logger.info 'exiting'
   end
 
@@ -190,6 +216,29 @@ class WslBridge < Relay
     end
   end
 
+  def start_socket_listener_fd(socket_name, remote_address, config, noncefile, fd)
+    @logger.info {"start listener on systemd fd #{fd} for #{socket_name}"}
+    assuan_socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
+    assuan_socket_path = %x[wslpath -u '#{assuan_socket_path}'].chomp
+    unix_server = UNIXServer.new(fd)
+    unix_server.listen 5
+    loop do
+      client = unix_server.accept
+      @logger.debug {"got connect request on WSL socket #{socket_name} via fd #{fd}"}
+      server = if config[:type] == :relay
+                 dial_winbridge remote_address, config[:port], noncefile
+               else
+                 dial_assuan assuan_socket_path
+               end
+      if server.nil?
+        client.close
+      else
+        @logger.debug 'connected'
+        relay client, server
+      end
+    end
+  end
+
   def dial_winbridge(remote_address, port, noncefile)
     # get WindowsBridge nonce
     nonce = get_nonce noncefile
@@ -218,6 +267,29 @@ class WslBridge < Relay
       end
     end
     nonce.pack('C16')
+  end
+
+  def systemd_enabled?
+    options[:systemd] == true
+  end
+
+  def listen_fds
+    ENV['LISTEN_FDS'].to_i
+  end
+
+  def listen_names
+    names_env = ENV['LISTEN_NAMES']
+    return [] if names_env.nil? || names_env.empty?
+
+    names_env.split(':')
+  end
+
+  def fd_for_socket_name(socket_name)
+    names = listen_names
+    idx = names.index(socket_name)
+    return nil if idx.nil?
+
+    3 + idx # LISTEN_FDS starts at fd 3
   end
 
   def trap_signals
@@ -469,6 +541,7 @@ options = {
   windows_bridge:     false,
   windows_logfile:    nil,
   windows_pidfile:    nil,
+  systemd:            false,
 }
 
 OptionParser.new do |opts|
@@ -516,6 +589,9 @@ OptionParser.new do |opts|
 
   opts.on('-W', '--[no-]windows-bridge', 'Start the Windows bridge (used by the WSL bridge)') do |v|
     options[:windows_bridge] = v
+  end
+  opts.on('--systemd', 'Use systemd socket activation (listen fds passed by systemd)') do
+    options[:systemd] = true
   end
   opts.on('-R', '--windows-address IPADDR', String, "The IP listening address of the Windows bridge [#{options[:windows_address]}]") do |v|
     options[:windows_address] = v
@@ -568,7 +644,7 @@ if options[:noncefile].nil?
   end
 end
 
-if options[:pidfile] && File.exist?(options[:pidfile])
+if options[:pidfile] && !options[:systemd] && File.exist?(options[:pidfile])
   pid = File.read(options[:pidfile]).chomp.to_i
   p = Sys::ProcTable.ps(pid: pid)
   if p && p.cmdline =~ /ruby.*gpgbridge\.rb/
@@ -577,7 +653,7 @@ if options[:pidfile] && File.exist?(options[:pidfile])
   end
 end
 
-if options[:daemon]
+if options[:daemon] && !options[:systemd]
   if options[:pidfile].nil?
     logger.error 'Missing pidfile argument'
     exit 1
@@ -588,15 +664,15 @@ if options[:daemon]
   else
     suppress_std_in_out
   end
-elsif options[:logfile]
+elsif options[:logfile] && !options[:systemd]
   redirect_std_in_out(options[:logfile])
 end
 
 # re-open the logger on the current stderr, after possibly daemonizing
 logger = get_logger options[:log_level], options[:windows_bridge]
 
-# write process id to file
-File.open(options[:pidfile], mode: 'w', perm: 0o644) {|f| f.puts Process.pid.to_s} if options[:pidfile]
+# write process id to file (skip for socket activation - systemd tracks the process)
+File.open(options[:pidfile], mode: 'w', perm: 0o644) {|f| f.puts Process.pid.to_s} if options[:pidfile] && !options[:systemd]
 
 logger.info 'starting gpgbridge'
 logger.debug {"using noncefile #{options[:noncefile]}"}
@@ -604,16 +680,27 @@ logger.debug {"using noncefile #{options[:noncefile]}"}
 # Create the map of gpg sockets and corresponding bridge ports
 first_port = options[:port]
 access_mode = options[:wsl_mode] == 'wsl2_nat' ? :relay : :assuan
-socket_names = {
-  'agent-socket'         => { port: first_port, type: access_mode },
-  'agent-extra-socket'   => { port: first_port + 1, type: access_mode },
-  'agent-browser-socket' => { port: first_port + 2, type: access_mode },
-}
-# SSH is always :relay for the Pageant workaround
-socket_names['agent-ssh-socket'] = { port: first_port + 3, type: :relay } if options[:enable_ssh_support]
+# For socket activation, the socket names are mapped from LISTEN_NAMES env var
+if options[:systemd]
+  listen_names = ENV['LISTEN_NAMES']&.split(':') || []
+  socket_names = {}
+  listen_names.each_with_index do |name, idx|
+    # SSH socket is special - needs relay mode
+    socket_names[name] = { port: first_port + idx, type: (name == 'agent-ssh-socket' ? :relay : access_mode) }
+  end
+  logger.warn 'SSH support enabled but no SSH listen fd found' if options[:enable_ssh_support] && !listen_names.include?('agent-ssh-socket')
+else
+  socket_names = {
+    'agent-socket'         => { port: first_port, type: access_mode },
+    'agent-extra-socket'   => { port: first_port + 1, type: access_mode },
+    'agent-browser-socket' => { port: first_port + 2, type: access_mode },
+  }
+  # SSH is always :relay for the Pageant workaround
+  socket_names['agent-ssh-socket'] = { port: first_port + 3, type: :relay } if options[:enable_ssh_support]
+end
 options[:socket_names] = socket_names
 logger.debug {"ssh support #{options[:enable_ssh_support]}"}
-logger.debug {"using socket_names #{options[:socket_names]}"}
+logger.debug {"socket_names #{options[:socket_names]}"}
 
 if windows_bridge
   require 'net/ssh'

@@ -1,0 +1,10 @@
+[Unit]
+Description=agent-extra-socket
+
+[Socket]
+ListenSequentialPacket=%t/gnupg/S.gpg-agent.extra
+SocketMode=0600
+Accept=no
+
+[Install]
+WantedBy=sockets.target

@@ -150,20 +150,21 @@ which is `/mnt/c/Program1/gpgbridge` in WSL.
 ```
 $ ruby /mnt/c/Program1/gpgbridge/gpgbridge.rb --help
 Usage: gpgbridge.rb [options]
-    -m, --wsl-mode MODE                  The WSL networking mode (wsl1, wsl2_nat, wsl2_mirrored) [wsl2_mirrored]
-    -r, --remote-address IPADDR          The remote address of the Windows bridge component [127.0.0.1]
-    -s, --[no-]enable-ssh-support        Enable proxying of gpg-agent SSH sockets
-    -d, --[no-]daemon                    Run as a daemon in the background
-    -p, --port PORT                      The first port (of three or four) to use for proxying sockets
-    -n, --noncefile PATH                 The nonce file path (defaults to file in Windows gpg homedir)
-    -l, --logfile PATH                   The log file path
-    -i, --pidfile PATH                   The PID file path
-    -v, --log-level LEVEL                Logging level (DEBUG, INFO, WARN, ERROR, FATAL, UNKNOWN) [WARN]
-    -W, --[no-]windows-bridge            Start the Windows bridge (used by the WSL bridge)
-    -R, --windows-address IPADDR         The IP listening address of the Windows bridge [127.0.0.1]
-    -L, --windows-logfile PATH           The log file path of the Windows bridge
-    -I, --windows-pidfile PATH           The PID file path of the Windows bridge
-    -h, --help                           Prints this help
+    -m, --wsl-mode MODE              The WSL networking mode (wsl1, wsl2_nat, wsl2_mirrored) [wsl2_mirrored]
+    -s, --[no-]enable-ssh-support    Enable proxying of gpg-agent SSH sockets
+    -r, --remote-address IPADDR      The remote address of the Windows bridge component [127.0.0.1]
+    -p, --port PORT                  The first port (of three or four) to use for proxying sockets
+    -n, --noncefile PATH             The nonce file path (defaults to file in Windows gpg homedir)
+    -l, --logfile PATH               The log file path
+    -i, --pidfile PATH               The PID file path
+    -d, --[no-]daemon                Run as a daemon in the background
+    -v, --log-level LEVEL            Logging level (DEBUG, INFO, WARN, ERROR, FATAL, UNKNOWN) [WARN]
+    -W, --[no-]windows-bridge        Start the Windows bridge (used by the WSL bridge)
+        --systemd                    Use systemd socket activation (listen fds passed by systemd)
+    -R, --windows-address IPADDR     The IP listening address of the Windows bridge [127.0.0.1]
+    -L, --windows-logfile PATH       The log file path of the Windows bridge
+    -I, --windows-pidfile PATH       The PID file path of the Windows bridge
+    -h, --help                       Prints this help
 ```
 
 ### WSL Mode Selection
@@ -178,6 +179,65 @@ Usage: gpgbridge.rb [options]
 When the WSL mode is set to `wsl2_nat`, the remote address is automatically
 detected from the default gateway. For other modes, the remote address
 defaults to `127.0.0.1` and can be overridden with `--remote-address`.
+
+## Systemd Socket Activation (Recommended)
+
+The recommended way to run gpgbridge is via systemd socket activation. This
+eliminates the need for manual startup scripts and provides better startup
+ordering and resource management.
+
+### Installation
+
+1. Copy the systemd unit files to your user systemd directory:
+
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cp systemd/*.socket systemd/*.service ~/.config/systemd/user/
+   ```
+
+2. Reload the systemd user daemon:
+
+   ```bash
+   systemctl --user daemon-reload
+   ```
+
+3. Enable and start the service:
+
+   ```bash
+   systemctl --user enable --now gpg-bridge-wsl.service
+   ```
+
+The service will now automatically start when any of the GPG sockets are
+accessed. The four sockets are:
+
+- `S.gpg-agent` - Main GPG agent socket
+- `S.gpg-agent.extra` - Extra GPG agent socket
+- `S.gpg-agent.browser` - Browser GPG agent socket
+- `S.gpg-agent.ssh` - SSH GPG agent socket
+
+### Configuration
+
+The systemd service file can be customized by creating a drop-in override:
+
+```bash
+systemctl --user edit gpg-bridge-wsl.service
+```
+
+For example, to change the WSL mode or enable SSH support:
+
+```ini
+[Service]
+ExecStart=/usr/bin/ruby /home/mhy/third-party/gpg-bridge-wsl2-ruby/gpgbridge.rb --systemd --enable-ssh-support --wsl-mode=wsl2_mirrored
+```
+
+### Manual Start (Legacy)
+
+For manual startup without systemd, use the helper script:
+
+```bash
+source gpgbridge_helper.sh
+start_gpgbridge --wsl2-mirrored --ssh
+```
 
 ## Example bash/zsh/sh helper functions
 

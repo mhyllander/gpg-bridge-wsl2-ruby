@@ -2,9 +2,23 @@
 # GPG bridging from WSL gpg to gpg4win gpg-agent.exe
 # (needed to use a Yubikey, since WSL cannot access USB devices)
 #
+# Manual start (legacy):
 # 1. Edit the PATHS section below (or set the variables before sourcing this file.)
 # 2. Source this file
 # 3. Call "start_gpgbridge [ --ssh ] [ --wsl2 | --wsl2-mirrored | --wsl2-nat ]".
+#
+# Systemd socket activation (recommended, user-level):
+# 1. Copy the systemd unit files to ~/.config/systemd/user/
+#    mkdir -p ~/.config/systemd/user
+#    cp systemd/*.socket systemd/*.service ~/.config/systemd/user/
+# 2. Reload systemd user daemon
+#    systemctl --user daemon-reload
+# 3. Enable and start the service
+#    systemctl --user enable --now gpg-bridge-wsl.service
+#
+# The systemd service uses socket activation and receives listen file descriptors
+# from systemd. It no longer creates sockets itself. This provides better startup
+# ordering and resource management.
 
 # PATHS
 SCRIPT_DIR_WSL="${SCRIPT_DIR_WSL:-/mnt/c/Program1/gpgbridge}"

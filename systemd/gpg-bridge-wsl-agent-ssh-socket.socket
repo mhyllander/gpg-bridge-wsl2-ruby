@@ -1,0 +1,10 @@
+[Unit]
+Description=agent-ssh-socket
+
+[Socket]
+ListenSequentialPacket=%t/gnupg/S.gpg-agent.ssh
+SocketMode=0600
+Accept=no
+
+[Install]
+WantedBy=sockets.target
