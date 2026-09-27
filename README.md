@@ -204,23 +204,22 @@ ordering and resource management.
 3. Enable the service and sockets:
 
    ```bash
-   systemctl --user enable --now gpg-bridge-wsl.service gpg-bridge-wsl-agent-browser-socket.socket gpg-bridge-wsl-agent-extra-socket.socket gpg-bridge-wsl-agent-socket.socket gpg-bridge-wsl-agent-ssh-socket.socket
+   systemctl --user enable --now gpg-bridge-wsl-agent-browser-socket.socket gpg-bridge-wsl-agent-extra-socket.socket gpg-bridge-wsl-agent-socket.socket gpg-bridge-wsl-agent-ssh-socket.socket
    ```
 
-4. You may need to mask the gpg-agent socket units, so that they do not compete for the sockets:
+4. You may need to mask the gpg-agent socket units:
 
    ```bash
-   systemctl --user mask gpg-agent.socket gpg-agent-extra.socket gpg-agent-ssh.socket gpg-agent-ssh.socket
+   systemctl --user mask gpg-agent.socket gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket
    ```
 
 The service will now automatically start when any of the GPG sockets are
 accessed. The four sockets are:
 
 - `S.gpg-agent` - Main GPG agent socket
-- `S.gpg-agent.extra` - Extra GPG agent socket
 - `S.gpg-agent.browser` - Browser GPG agent socket
+- `S.gpg-agent.extra` - Extra GPG agent socket
 - `S.gpg-agent.ssh` - SSH GPG agent socket
-
 
 
 ### Configuration

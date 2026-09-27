@@ -1,5 +1,5 @@
 # This file can be used with the "ruby-lsp" extension in VS Code.
-# Set "Bundle Gemfile" in the "Ruby LSP" Workspace settings to "./.Gemfile.dev"
+# Set "Bundle Gemfile" in the "Ruby LSP" Workspace settings to ".vscode/Gemfile"
 
 source 'https://rubygems.org'
 git_source(:github) { |repo| "https://github.com/#{repo}.git" }
