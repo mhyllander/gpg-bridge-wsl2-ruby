@@ -79,94 +79,12 @@ module Net
   end
 end
 
-# WindowsRelay runs in Windows. It receives requests over the network from
-# WslRelay and forwards them through the assuan sockets to gpg-agent.exe
-# from Gpg4Win. It can forward both gpg and SSH Pageant requests.
-class WindowsRelay < Relay
-  def initialize(options, logger)
-    super options, logger
+class PageantRelay
+  def initialize(client, logger)
+    @logger = logger
 
-    @noncefile = options[:noncefile]
-    @pidfile = options[:pidfile]
-
-    # make sure gpg-agent.exe is running
-    system 'gpg-connect-agent.exe /bye 2>nul'
-
-    # create nonce
-    nonce = create_nonce @noncefile
-
-    # setup cleanup handlers
-    at_exit {cleanup}
-
-    @logger.debug 'start proxies'
-    remote_address = options[:remote_address]
-    # select the sockets to relay, which depends on the WSL mode
-    socket_names = options[:socket_names].select {|_, v| v[:type] == :relay}
-    @threads = socket_names.collect do |socket_name, config|
-      Thread.start(socket_name, remote_address, config, nonce) do |s, r, c, n|
-        if s == 'agent-ssh-socket'
-          start_pageant_proxy s, r, c, n
-        else
-          start_assuan_proxy s, r, c, n
-        end
-      end
-    end
-  end
-
-  def cleanup
-    File.unlink @noncefile if @noncefile
-    File.unlink @pidfile if @pidfile
-    @logger.info 'exiting'
-  end
-
-  def create_nonce(noncefile)
-    nonce = Random.new.bytes(16)
-    File.write(noncefile, nonce)
-    @logger.debug {"created nonce in noncefile #{noncefile}: #{nonce.unpack('C*')}"}
-    nonce
-  end
-
-  def start_assuan_proxy(socket_name, remote_address, config, nonce)
-    port = config[:port]
-    socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
-    @logger.info {"start assuan socket proxy for #{socket_name} = #{socket_path} on port #{port}"}
-    Socket.tcp_server_loop(remote_address, port) do |sock, _client_addrinfo|
-      @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
-      wsl_bridge_nonce = sock.recv 16
-      if wsl_bridge_nonce != nonce
-        @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
-        sock.close
-      else
-        @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
-        gpg_agent = dial_assuan socket_path
-        relay sock, gpg_agent
-      end
-    end
-  end
-
-  def start_pageant_proxy(socket_name, remote_address, config, nonce)
-    port = config[:port]
-    @logger.info {"start Pageant proxy for #{socket_name} on port #{port}"}
-    # the pageant "socket" isn't a real socket (not an IO), can't be used in IO.select.
-    @pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
-    Socket.tcp_server_loop(remote_address, port) do |sock, _client_addrinfo|
-      @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
-      wsl_bridge_nonce = sock.recv 16
-      if wsl_bridge_nonce != nonce
-        @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
-        sock.close
-      else
-        @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
-        relay_pageant sock
-      end
-    end
-  ensure
-    @logger.debug 'closing pageant socket'
-    @pageant.close
-  end
-
-  def relay_pageant(client)
     Thread.new do
+      @pageant = Net::SSH::Authentication::Pageant::SocketWithTimeout.open
       loop do
         ready = IO.select([client])
         readable = ready[0]
@@ -238,6 +156,92 @@ class WindowsRelay < Relay
     end
 
     pageant # return in case it was reconnected
+  end
+end
+
+# WindowsRelay runs in Windows. It receives requests over the network from
+# WslRelay and forwards them through the assuan sockets to gpg-agent.exe
+# from Gpg4Win. It can forward both gpg and SSH Pageant requests.
+class WindowsRelay < Relay
+  def initialize(options, logger)
+    super options, logger
+
+    @noncefile = options[:noncefile]
+    @pidfile = options[:pidfile]
+
+    # make sure gpg-agent.exe is running
+    system 'gpg-connect-agent.exe /bye 2>nul'
+
+    # create nonce
+    nonce = create_nonce @noncefile
+
+    # setup cleanup handlers
+    at_exit {cleanup}
+
+    @logger.debug 'start proxies'
+    remote_address = options[:remote_address]
+    # select the sockets to relay, which depends on the WSL mode
+    socket_names = options[:socket_names].select {|_, v| v[:type] == :relay}
+    @threads = socket_names.collect do |socket_name, config|
+      Thread.start(socket_name, remote_address, config, nonce) do |s, r, c, n|
+        if s == 'agent-ssh-socket'
+          start_pageant_proxy s, r, c, n
+        else
+          start_assuan_proxy s, r, c, n
+        end
+      end
+    end
+  end
+
+  def cleanup
+    File.unlink @noncefile if @noncefile
+    File.unlink @pidfile if @pidfile
+    @logger.info 'exiting'
+  end
+
+  def create_nonce(noncefile)
+    nonce = Random.new.bytes(16)
+    File.write(noncefile, nonce)
+    @logger.debug {"created nonce in noncefile #{noncefile}: #{nonce.unpack('C*')}"}
+    nonce
+  end
+
+  def start_assuan_proxy(socket_name, remote_address, config, nonce)
+    port = config[:port]
+    socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
+    @logger.info {"start assuan socket proxy for #{socket_name} = #{socket_path} on port #{port}"}
+    Socket.tcp_server_loop(remote_address, port) do |sock, _client_addrinfo|
+      @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
+      wsl_bridge_nonce = sock.recv 16
+      if wsl_bridge_nonce != nonce
+        @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
+        sock.close
+      else
+        @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
+        gpg_agent = dial_assuan socket_path
+        relay sock, gpg_agent
+      end
+    end
+  end
+
+  def start_pageant_proxy(socket_name, remote_address, config, nonce)
+    port = config[:port]
+    @logger.info {"start Pageant proxy for #{socket_name} on port #{port}"}
+    # the pageant "socket" isn't a real socket (not an IO), can't be used in IO.select.
+    Socket.tcp_server_loop(remote_address, port) do |sock, _client_addrinfo|
+      @logger.debug {"got bridge connect request on port #{port} for #{socket_name}"}
+      wsl_bridge_nonce = sock.recv 16
+      if wsl_bridge_nonce != nonce
+        @logger.error {"received wrong nonce from WSL bridge on port #{port} for #{socket_name}: #{wsl_bridge_nonce.unpack('C*')}"}
+        sock.close
+      else
+        @logger.info {"got correct nonce on port #{port} for #{socket_name}"}
+        PageantRelay.new sock, @logger
+      end
+    end
+  ensure
+    @logger.debug 'closing pageant socket'
+    @pageant.close
   end
 
   def trap_signals
