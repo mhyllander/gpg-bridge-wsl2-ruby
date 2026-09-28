@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# gpgbridge.rb forwards requests from gpg clients in WSL1 and WSL2 to
+# gpg_relay_wsl.rb forwards requests from gpg clients in WSL1 and WSL2 to
 # Gpg4win's gpg-agent.exe in Windows. It can also forward ssh requests to
 # gpg-agent.exe, when using a PGP key for ssh authentication.
 
@@ -14,9 +14,9 @@ require_relative 'relay'
 
 FIRST_PORT = 6910
 
-# WslBridge runs in WSL. It receives requests from WSL clients through local sockets and either connects directly with
-# gpg_agent.exe using its Assuan sockets (in Windows), or relays them to WindowsBridge (in Windows).
-class WslBridge < Relay
+# WslRelay runs in WSL. It receives requests from WSL clients through local sockets and either connects directly with
+# gpg_agent.exe using its Assuan sockets (in Windows), or relays them to WindowsRelay (in Windows).
+class WslRelay < Relay
   def initialize(options, logger)
     super options, logger
 
@@ -114,7 +114,7 @@ class WslBridge < Relay
   end
 
   def dial_win_relay(remote_address, port, noncefile)
-    # get WindowsBridge nonce
+    # get WindowsRelay nonce
     nonce = get_nonce noncefile
     sock = nil
     begin
@@ -193,15 +193,15 @@ LEVELS = %w[DEBUG INFO WARN ERROR FATAL UNKNOWN].freeze
 #
 # gpg_agent.exe is listening on port 127.0.0.1 in the Windows VM.
 #
-# 1. WSL2 in NAT networking mode can connect to the Windows VM via the default gateway. The WinBridge must listen on
+# 1. WSL2 in NAT networking mode can connect to the Windows VM via the default gateway. The WinRelay must listen on
 #    0.0.0.0, and all gpg-agent.exe ports must be proxied.
-# 2. WSL2 in mirrored networking mode, and WSL1, can connect to gpg_agent.exe on 127.0.0.1 directly. The WinBridge is
+# 2. WSL2 in mirrored networking mode, and WSL1, can connect to gpg_agent.exe on 127.0.0.1 directly. The WinRelay is
 #    would ideally not be needed in this case, but there is an issue with the SSH socket.
 #
 # gpg_agent.exe is unfortunately not responding on the SSH socket. The workaround is to use the PuTTY Pageant protocol.
-# This means that when SSH support is enabled, the WinBridge must always be started to proxy the ssh port.
+# This means that when SSH support is enabled, the WinRelay must always be started to proxy the ssh port.
 #
-# Summary: The WinBridge must be deployed, to proxy either all sockets when WSL2 is in NAT networking mode, or proxy the
+# Summary: The WinRelay must be deployed, to proxy either all sockets when WSL2 is in NAT networking mode, or proxy the
 # SSH socket in all other cases.
 
 options = {
@@ -217,7 +217,7 @@ options = {
 }
 
 OptionParser.new do |opts|
-  opts.banner = 'Usage: gpgbridge.rb [options]'
+  opts.banner = 'Usage: gpg_relay_wsl.rb [options]'
 
   opts.on('-m', '--wsl-mode MODE', String, "The WSL networking mode (wsl1, wsl2_nat, wsl2_mirrored) [#{options[:wsl_mode]}]") do |v|
     options[:wsl_mode] = v
@@ -275,7 +275,7 @@ end
 if options[:noncefile].nil?
   begin
     win_gpghome = %x[gpgconf.exe --list-dirs homedir].chomp
-    noncefile = 'gpgbridge.nonce'
+    noncefile = 'gpg_relay.nonce'
     options[:noncefile] = "#{%x[wslpath -u '#{win_gpghome}'].chomp}/#{noncefile}"
   rescue StandardError => e
     logger.error 'constructing path to noncefile'
@@ -287,7 +287,7 @@ end
 if options[:pidfile] && !options[:systemd] && File.exist?(options[:pidfile])
   pid = File.read(options[:pidfile]).chomp.to_i
   p = Sys::ProcTable.ps(pid: pid)
-  if p && p.cmdline =~ /ruby.*gpgbridge\.rb/
+  if p && p.cmdline =~ /ruby.*gpg_relay_wsl\.rb/
     logger.debug {"detected gpgbridge.rb running as pid #{pid}, exiting"}
     exit 0
   end
@@ -324,4 +324,4 @@ if options[:systemd]
 end
 
 Dir.chdir ENV['HOME']
-WslBridge.new(options, logger).run
+WslRelay.new(options, logger).run

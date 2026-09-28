@@ -7,7 +7,7 @@ FileDescriptorName=agent-socket
 SocketMode=0600
 DirectoryMode=0700
 Accept=no
-Service=gpg-bridge-wsl.service
+Service=gpg-relay-agent.service
 
 [Install]
 WantedBy=sockets.target

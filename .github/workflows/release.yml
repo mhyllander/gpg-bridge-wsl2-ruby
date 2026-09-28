@@ -17,10 +17,10 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Build tar.gz
-        run: tar zcf gpgbridge.tar.gz gpgbridge.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
+        run: tar zcf gpgrelay.tar.gz relay.rb gpg_relay_wsl.rb gpg_relay_win.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
 
       - name: Build zip
-        run: zip gpgbridge.zip gpgbridge.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
+        run: zip gpgrelay.zip relay.rb gpg_relay_wsl.rb gpg_relay_win.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
 
       - name: Create release
         id: create_release

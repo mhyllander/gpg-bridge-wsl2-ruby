@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# gpgbridge.rb forwards requests from gpg clients in WSL1 and WSL2 to
+# gpg_relay_win.rb forwards requests from gpg clients in WSL1 and WSL2 to
 # Gpg4win's gpg-agent.exe in Windows. It can also forward ssh requests to
 # gpg-agent.exe, when using a PGP key for ssh authentication.
 
@@ -79,10 +79,10 @@ module Net
   end
 end
 
-# WindowsBridge runs in Windows. It receives requests over the network from
-# WslBridge and forwards them through the assuan sockets to gpg-agent.exe
+# WindowsRelay runs in Windows. It receives requests over the network from
+# WslRelay and forwards them through the assuan sockets to gpg-agent.exe
 # from Gpg4Win. It can forward both gpg and SSH Pageant requests.
-class WindowsBridge < Relay
+class WindowsRelay < Relay
   def initialize(options, logger)
     super options, logger
 
@@ -270,7 +270,7 @@ options = {
 }
 
 OptionParser.new do |opts|
-  opts.banner = 'Usage: gpgbridge.rb [options]'
+  opts.banner = 'Usage: gpg_relay_win.rb [options]'
 
   opts.on('-s', '--[no-]enable-ssh-support', 'Enable proxying of gpg-agent SSH sockets') do |v|
     options[:enable_ssh_support] = v
@@ -286,13 +286,13 @@ OptionParser.new do |opts|
     options[:log_level] = v
   end
 
-  opts.on('-R', '--windows-address IPADDR', String, "The IP listening address of the Windows bridge [#{options[:windows_address]}]") do |v|
+  opts.on('-R', '--windows-address IPADDR', String, "The IP listening address [#{options[:windows_address]}]") do |v|
     options[:windows_address] = v
   end
-  opts.on('-L', '--windows-logfile PATH', String, 'The log file path of the Windows bridge') do |v|
+  opts.on('-L', '--windows-logfile PATH', String, 'The log file path') do |v|
     options[:windows_logfile] = v
   end
-  opts.on('-I', '--windows-pidfile PATH', String, 'The PID file path of the Windows bridge') do |v|
+  opts.on('-I', '--windows-pidfile PATH', String, 'The PID file path') do |v|
     options[:windows_pidfile] = v
   end
   opts.on('-h', '--help', 'Prints this help') do
@@ -306,7 +306,7 @@ logger = get_logger options[:log_level]
 if options[:noncefile].nil?
   begin
     win_gpghome = %x[gpgconf.exe --list-dirs homedir].chomp
-    noncefile = 'gpgbridge.nonce'
+    noncefile = 'gpg_relay.nonce'
     options[:noncefile] = "#{win_gpghome}\\#{noncefile}"
   rescue StandardError => e
     logger.error 'constructing path to noncefile'
@@ -352,4 +352,4 @@ logger.debug {"ssh support #{options[:enable_ssh_support]}"}
 logger.debug {"socket_names #{options[:socket_names]}"}
 
 Dir.chdir File.dirname(__FILE__)
-WindowsBridge.new(options, logger).run
+WindowsRelay.new(options, logger).run
