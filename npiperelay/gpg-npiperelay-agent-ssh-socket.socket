@@ -1,0 +1,13 @@
+[Unit]
+Description=npiperelay-agent-ssh-socket
+
+[Socket]
+ListenStream=%t/gnupg/S.gpg-npiperelay-agent.ssh
+FileDescriptorName=agent-ssh-socket
+SocketMode=0600
+DirectoryMode=0700
+Accept=no
+Service=gpg-npiperelay-agent.service
+
+[Install]
+WantedBy=sockets.target

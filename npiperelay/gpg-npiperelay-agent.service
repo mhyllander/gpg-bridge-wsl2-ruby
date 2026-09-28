@@ -1,0 +1,17 @@
+[Unit]
+Description=GPG Relay Agent
+Requires=gpg-npiperelay-agent-ssh-socket.socket
+After=gpg-npiperelay-agent-ssh-socket.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat ACCEPT-FD:3,fork EXEC:"npiperelay -ei -s //./pipe/openssh-ssh-agent",nofork
+Environment='PATH=/usr/local/bin:/usr/bin:/bin'
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpg-npiperelay-agent
+
+[Install]
+WantedBy=default.target
