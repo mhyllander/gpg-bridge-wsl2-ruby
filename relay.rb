@@ -1,7 +1,5 @@
 require 'socket'
 
-BUFSIZ = 4096
-
 class Relay
   def initialize(options, logger)
     @options = options
@@ -32,52 +30,33 @@ class Relay
 
   def relay(client, server)
     Thread.new do
-      loop = true
-      while loop
-        ready = IO.select([client, server])
-        readable = ready[0]
-        if readable.include?(client)
-          @logger.debug 'msg from client'
-          begin
-            msg = client.recv BUFSIZ
-            @logger.debug "msg from client: (len=#{msg&.length}) #{msg}"
-            if msg.nil? # || msg.empty?
-              loop = false
-            else
-              server.send msg, 0
-            end
-          rescue Errno::ECONNRESET => e
-            @logger.error "Exception while receiving msg from client: #{e.inspect}"
-            Thread.exit
-          rescue StandardError => e
-            @logger.error "StandardError while receiving msg from client: #{e.inspect}"
-            Thread.exit
-          end
-        end
-
-        next unless readable.include?(server)
-
-        @logger.debug 'msg from server'
-        begin
-          msg = server.recv BUFSIZ
-          @logger.debug "msg from server: (len=#{msg&.length}) #{msg}"
-          if msg.nil? # || msg.empty?
-            loop = false
-          else
-            client.send msg, 0
-          end
-        rescue Errno::ECONNRESET => e
-          @logger.error "Exception while receiving msg from server: #{e.inspect}"
-          Thread.exit
-        rescue StandardError => e
-          @logger.error "StandardError while receiving msg from server: #{e.inspect}"
-          Thread.exit
-        end
-      end
+      directions = [
+        Thread.new { copy_direction(client, server) },
+        Thread.new { copy_direction(server, client) },
+      ]
+      directions.each(&:join)
     ensure
       @logger.debug 'closing sockets'
-      client.close
-      server.close
+      close_socket(client)
+      close_socket(server)
     end
+  end
+
+  private
+
+  def copy_direction(source, destination)
+    copied = IO.copy_stream(source, destination)
+    @logger.debug { "copied #{copied} bytes before EOF" }
+    destination.shutdown(Socket::SHUT_WR)
+  rescue IOError, SystemCallError => e
+    @logger.error "socket relay failed: #{e.inspect}"
+    close_socket(source)
+    close_socket(destination)
+  end
+
+  def close_socket(socket)
+    socket.close unless socket.closed?
+  rescue IOError, SystemCallError => e
+    @logger.debug { "socket close failed: #{e.inspect}" }
   end
 end

@@ -14,25 +14,23 @@ with WSL1 together with Gpg4win and a Yubikey.
 
 This solution consists of two relay components:
 
-- **WSL Relay** (`gpg_relay_wsl.rb`): Runs in WSL. Receives requests from
-  gpg/ssh clients through local Unix sockets and forwards them to the
-  Win Relay in Windows.
-- **Win Relay** (`gpg_relay_win.rb`): Runs in Windows. Receives requests
-  over TCP from the WSL Relay and forwards them through Assuan sockets to
-  gpg-agent.exe in Gpg4win.
+- **WSL Relay** (`gpg_relay_wsl.rb`): Runs in WSL. Receives GPG and SSH
+  requests through local Unix sockets. It connects GPG traffic directly
+  to Gpg4win or through the Win Relay, and starts `npiperelay` for SSH.
+- **Win Relay** (`gpg_relay_win.rb`): Runs in Windows only for WSL2 NAT
+  mode. Receives GPG requests over TCP and forwards them to Gpg4win.
 
 Both components share a common base class in `relay.rb`.
 
-Since Windows does not support Unix sockets, gpg-agent.exe uses a mechanism
-called an Assuan socket. This is a file that contains the TCP port that
-gpg-agent is listening on, and a nonce that is sent as authentication after
-connecting. The Win Relay reads the Assuan socket files and connects
-directly with gpg-agent.exe (except for the ssh-agent socket).
+Gpg4win's GPG Assuan socket files contain a TCP port and a nonce used
+to authenticate the connection. WSL1 and WSL2 mirrored mode can use
+these sockets directly. WSL2 NAT mode uses the Win Relay for GPG traffic.
 
-Gpg4win's gpg-agent.exe does not currently support standard ssh-agent (or
-rather, the implementation is broken). Therefore, Pageant ssh support must
-be enabled in gpg-agent.exe. To communicate with the Pageant server, the
-Win Relay uses [net-ssh](https://github.com/net-ssh/net-ssh).
+For SSH, the WSL Relay starts `npiperelay -ei -s
+//./pipe/openssh-ssh-agent` for each client and forwards bytes to
+Gpg4win's named pipe. SSH traffic never passes through the Win Relay.
+ Gpg4win's gpg-agent must be configured with `enable-ssh-support` and
+ `enable-win32-openssh-support`.
 
 ### WSL Modes
 
@@ -42,56 +40,46 @@ The WSL Relay supports three networking modes, selected with `--wsl-mode`:
 
 ```
 gpg -> (Unix socket) -> WSL Relay -> (Assuan/TCP socket) -> gpg-agent.exe
-ssh -> (Unix socket) -> WSL Relay -> (TCP socket) -> Win Relay -> (Pageant socket) -> gpg-agent.exe
+ssh -> (Unix socket) -> WSL Relay -> npiperelay -> (named pipe) -> gpg-agent.exe
 ```
 
 WSL1 can connect directly to 127.0.0.1 in Windows, so no firewall changes
-are needed. The Win Relay is only required when SSH support is enabled
-(see below).
+are needed. The Win Relay is not required in this mode.
 
 **WSL2 with NAT networking** (`wsl2_nat`):
 
 ```
 gpg -> (Unix socket) -> WSL Relay -> [Windows Firewall] -> (TCP socket) -> Win Relay -> (Assuan/TCP socket) -> gpg-agent.exe
-ssh -> (Unix socket) -> WSL Relay -> [Windows Firewall] -> (TCP socket) -> Win Relay -> (Pageant socket) -> gpg-agent.exe
+ssh -> (Unix socket) -> WSL Relay -> npiperelay -> (named pipe) -> gpg-agent.exe
 ```
 
 WSL2 in NAT mode has a different IP address than the Windows host, so
 network traffic to Windows is external (public). The Win Relay must listen
-on `0.0.0.0` and all gpg-agent.exe ports must be proxied. A firewall rule
-is required (see [Firewall and Security](#firewall-and-security)).
+on `0.0.0.0` and the three GPG ports must be proxied. A firewall rule
+is required for the three GPG ports (see [Firewall and Security](#firewall-and-security)).
 
 **WSL2 with Mirrored networking** (`wsl2_mirrored`):
 
 ```
 gpg -> (Unix socket) -> WSL Relay -> (Assuan/TCP socket) -> gpg-agent.exe
-ssh -> (Unix socket) -> WSL Relay -> (TCP socket) -> Win Relay -> (Pageant socket) -> gpg-agent.exe
+ssh -> (Unix socket) -> WSL Relay -> npiperelay -> (named pipe) -> gpg-agent.exe
 ```
 
 WSL2 in mirrored mode can connect to gpg-agent.exe on 127.0.0.1 directly,
-so no firewall changes are needed. However, the Win Relay is still required
-to proxy the SSH socket (see below).
+so no firewall changes or Win Relay are needed.
 
 ### Access Modes
 
-The relay uses two different access modes depending on the WSL mode:
-
-- **Direct access** (WSL1, WSL2 Mirrored): The WSL Relay connects directly
-  to gpg-agent.exe's Assuan sockets. This is simpler and does not require
-  the Win Relay for gpg traffic.
-- **Relay access** (WSL2 NAT, and all cases with SSH support): The
-  WSL Relay relays traffic through the Win Relay over TCP. This is needed
-  when direct access to gpg-agent.exe is not possible, or for SSH
-  authentication (which requires the Pageant protocol workaround).
-
-When SSH support is enabled, the Win Relay must be started independently
-in Windows because gpg-agent.exe does not respond on the SSH Assuan socket.
-The Win Relay proxies the SSH port using the PuTTY Pageant protocol.
+- **Direct GPG access** (WSL1, WSL2 mirrored): The WSL Relay connects to
+  Gpg4win's Assuan sockets.
+- **GPG relay access** (WSL2 NAT): The WSL Relay connects to the Win Relay
+  over TCP. The Win Relay connects to Gpg4win's Assuan sockets.
+- **SSH access** (all modes): The WSL Relay connects to Gpg4win's
+  `//./pipe/openssh-ssh-agent` through `npiperelay`.
 
 ### Authentication
 
-To prevent unauthorized access to the Win Relay (since WSL2 NAT mode
-exposes it to the network), a nonce-based authentication scheme is used.
+To prevent unauthorized access to the Win Relay in WSL2 NAT mode, a nonce-based authentication scheme is used.
 The Win Relay generates a random 16-byte nonce and stores it in a file.
 The WSL Relay reads the nonce from the file and sends it when connecting.
 The Win Relay rejects connections with an incorrect nonce.
@@ -104,14 +92,14 @@ The Win Relay rejects connections with an incorrect nonce.
 since they connect to 127.0.0.1 in Windows directly.
 
 **WSL2 NAT** mode requires a Windows Firewall rule to allow incoming
-connections to the Win Relay. A general rule usually exists that denies
+connections to the Win Relay. A general rule may exist that denies
 incoming Public TCP requests to the Ruby interpreter. You will need to
 disable this rule, and instead add a rule that allows incoming traffic to
 certain ports.
 
 Specifically, add an incoming rule for the Public profile that allows
 connections from `172.16.0.0/12` and `192.168.0.0/16` to TCP ports
-`6910-6913` (or the custom port range you selected with `--port`).
+`6910-6912` (or the three ports starting at the custom `--port`).
 
 The private IP address ranges listed above are used by WSL2, but probably
 also by computers on your local LAN. To limit access to the Win Relay, a
@@ -141,8 +129,14 @@ each environment.
 
 Or, if you prefer to do it manually:
 
-1. In Windows: `gem install -N sys-proctable net-ssh`
-2. In each WSL distribution: `gem install -N sys-proctable ptools`
+1. In Windows: `gem install -N sys-proctable`
+2. In each WSL distribution: `gem install -N sys-proctable`
+
+For SSH support, install `npiperelay.exe` in Windows and create a WSL
+symlink at `/usr/local/bin/npiperelay` pointing to it. Ensure
+`/usr/local/bin` is on the WSL Relay's `PATH`, including when started
+by systemd. The relay reports an error at startup if SSH support is
+enabled and `npiperelay` cannot be found.
 
 ### WSL Relay
 
@@ -153,27 +147,26 @@ which is `/mnt/c/Program1/gpgrelay` in WSL.
 $ ruby /mnt/c/Program1/gpgrelay/gpg_relay_wsl.rb --help
 Usage: gpg_relay_wsl.rb [options]
     -m, --wsl-mode MODE              The WSL networking mode (wsl1, wsl2_nat, wsl2_mirrored) [wsl2_mirrored]
-    -s, --[no-]enable-ssh-support    Enable proxying of gpg-agent SSH sockets
-    -r, --remote-address IPADDR      The remote address of the Win Relay [127.0.0.1]
-    -p, --port PORT                  The first port (of three or four) to use for proxying sockets
+    -s, --[no-]enable-ssh-support    Relay SSH through the Gpg4win named pipe using npiperelay
+    -r, --remote-address IPADDR      The remote address of the Windows relay component [127.0.0.1]
+    -p, --port PORT                  The first of three ports used for GPG sockets
     -n, --noncefile PATH             The nonce file path (defaults to file in Windows gpg homedir)
     -l, --logfile PATH               The log file path
     -i, --pidfile PATH               The PID file path
-    -v, --log-level LEVEL            Logging level (DEBUG, INFO, WARN, ERROR, FATAL, UNKNOWN) [WARN]
         --systemd                    Use systemd socket activation (listen fds passed by systemd)
+    -v, --log-level LEVEL            Logging level (DEBUG, INFO, WARN, ERROR, FATAL, UNKNOWN) [WARN]
     -h, --help                       Prints this help
 ```
 
 ### Win Relay
 
-The Win Relay must be started independently in Windows (e.g., via Task
-Scheduler, a batch file, or PowerShell).
+In `wsl2_nat` mode, start the Win Relay independently in Windows (e.g., via
+Task Scheduler, a batch file, or PowerShell). It handles only GPG traffic.
 
 ```bash
 $ ruby C:\Program1\gpgrelay\gpg_relay_win.rb --help
 Usage: gpg_relay_win.rb [options]
-    -s, --[no-]enable-ssh-support    Enable proxying of gpg-agent SSH sockets
-    -p, --port PORT                  The first port (of three or four) to use for proxying sockets
+    -p, --port PORT                  The first of three ports used for GPG sockets
     -n, --noncefile PATH             The nonce file path (defaults to file in Windows gpg homedir)
     -v, --log-level LEVEL            Logging level (DEBUG, INFO, WARN, ERROR, FATAL, UNKNOWN) [WARN]
     -R, --windows-address IPADDR     The IP listening address [127.0.0.1]
@@ -188,8 +181,7 @@ Usage: gpg_relay_win.rb [options]
 - **`wsl2_nat`**: Use this mode when WSL2 is configured with NAT networking.
   Requires a Windows Firewall rule (see [Firewall and Security](#firewall-and-security)).
 - **`wsl2_mirrored`** (default): Use this mode when WSL2 is configured with
-  mirrored networking. No firewall changes needed, but the Win Relay is
-  still required for SSH support.
+  mirrored networking. No firewall changes or Win Relay are needed.
 
 When the WSL mode is set to `wsl2_nat`, the remote address is automatically
 detected from the default gateway. For other modes, the remote address
@@ -216,7 +208,7 @@ ordering and resource management.
    systemctl --user daemon-reload
    ```
 
-3. Enable the service and sockets:
+3. Enable the socket units:
 
    ```bash
    systemctl --user enable --now gpg-relay-agent-socket.socket gpg-relay-agent-extra-socket.socket gpg-relay-agent-browser-socket.socket gpg-relay-agent-ssh-socket.socket
@@ -236,7 +228,6 @@ accessed. The four sockets are:
 - `S.gpg-agent.extra` - Extra GPG agent socket
 - `S.gpg-agent.ssh` - SSH GPG agent socket
 
-
 ### Configuration
 
 The systemd service file can be customized by creating a drop-in override:
@@ -251,19 +242,6 @@ For example, to change the WSL mode or enable SSH support:
 [Service]
 ExecStart=/usr/bin/ruby /mnt/c/Program1/gpgrelay/gpg_relay_wsl.rb --enable-ssh-support --wsl-mode=wsl2_mirrored
 ```
-
-## Timeout during PIN entry
-
-Net/ssh normally has a hard-coded timeout of 5s when communicating with
-Pageant. This does not work well when gpg-agent.exe is the Pageant server,
-because the Pageant client will probably time out while gpg-agent.exe is
-prompting for PIN entry. The result is that ssh authentication fails
-unless you are really fast when entering the PIN.
-
-This is handled by specializing `Net::SSH::Authentication::Pageant::Socket`
-with a custom `SocketWithTimeout` class that uses a configurable timeout
-(default 30 seconds) via `SendMessageTimeout` instead of the default.
-This allows gpg-agent.exe enough time to prompt for PIN entry.
 
 ## Tips when using Remote Desktop
 

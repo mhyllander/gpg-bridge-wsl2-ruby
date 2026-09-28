@@ -8,7 +8,7 @@ require 'socket'
 require 'date'
 require 'sys/proctable'
 require 'logger'
-require 'ptools'
+require 'open3'
 
 require_relative 'relay'
 
@@ -41,7 +41,7 @@ class WslRelay < Relay
                    Thread.start(socket_name, remote_address, config, noncefile, fd) do |s, r, c, n, f|
                      start_socket_listener_fd s, r, c, n, f
                    end
-                 end
+                 end.compact
                else
                  # Use traditional socket creation
                  socket_names.collect do |socket_name, config|
@@ -70,45 +70,81 @@ class WslRelay < Relay
 
   def start_socket_listener(socket_name, remote_address, config, noncefile)
     socket_path = %x[gpgconf --list-dirs #{socket_name}].chomp
-    assuan_socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
-    assuan_socket_path = %x[wslpath -u '#{assuan_socket_path}'].chomp
+    assuan_socket_path = windows_assuan_socket_path(socket_name) if config[:type] == :assuan
     @logger.info {"start listener on WSL socket #{socket_name} = #{socket_path}"}
     # File.unlink(socket_path) if File.exist?(socket_path) && File.socket?(socket_path)
     Socket.unix_server_loop(socket_path) do |client, _client_addrinfo|
       @logger.debug {"got connect request on WSL socket #{socket_name} = #{socket_path}"}
-      server = if config[:type] == :relay
-                 dial_win_relay remote_address, config[:port], noncefile
-               else
-                 dial_assuan assuan_socket_path
-               end
-      if server.nil?
-        sock.close
-      else
-        @logger.debug 'connected'
-        relay client, server
-      end
+      handle_client client, remote_address, config, noncefile, assuan_socket_path
     end
   end
 
   def start_socket_listener_fd(socket_name, remote_address, config, noncefile, fd)
     @logger.info {"start listener on systemd fd #{fd} for #{socket_name}"}
-    assuan_socket_path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
-    assuan_socket_path = %x[wslpath -u '#{assuan_socket_path}'].chomp
+    assuan_socket_path = windows_assuan_socket_path(socket_name) if config[:type] == :assuan
     unix_server = UNIXServer.for_fd(fd)
     unix_server.listen 5
     loop do
       client = unix_server.accept
       @logger.debug {"got connect request on WSL socket #{socket_name} via fd #{fd}"}
-      server = if config[:type] == :relay
-                 dial_win_relay remote_address, config[:port], noncefile
-               else
-                 dial_assuan assuan_socket_path
-               end
-      if server.nil?
-        client.close
-      else
-        @logger.debug 'connected'
-        relay client, server
+      handle_client client, remote_address, config, noncefile, assuan_socket_path
+    end
+  end
+
+  def windows_assuan_socket_path(socket_name)
+    path = %x[gpgconf.exe --list-dirs #{socket_name}].chomp
+    %x[wslpath -u '#{path}'].chomp
+  end
+
+  def handle_client(client, remote_address, config, noncefile, assuan_socket_path)
+    if config[:type] == :ssh
+      relay_ssh(client)
+      return
+    end
+
+    server = if config[:type] == :relay
+               dial_win_relay remote_address, config[:port], noncefile
+             else
+               dial_assuan assuan_socket_path
+             end
+    if server.nil?
+      client.close
+    else
+      @logger.debug 'connected'
+      relay client, server
+    end
+  end
+
+  def relay_ssh(client)
+    Thread.new do
+      input = output = process = writer = nil
+      begin
+        input, output, process = Open3.popen2('npiperelay', '-ei', '-s', '//./pipe/openssh-ssh-agent')
+        writer = Thread.new do
+          copied = IO.copy_stream(client, input)
+          @logger.debug {"SSH client input ended after #{copied} bytes"}
+        rescue IOError, SystemCallError => e
+          @logger.debug {"SSH client input closed: #{e.inspect}"}
+        ensure
+          input.close unless input.closed?
+        end
+        copied = IO.copy_stream(output, client)
+        @logger.debug {"SSH pipe output ended after #{copied} bytes"}
+      rescue IOError, SystemCallError => e
+        @logger.error "SSH pipe relay failed: #{e.inspect}"
+      ensure
+        client.close unless client.closed?
+        output.close if output && !output.closed?
+        writer.join if writer
+        input.close if input && !input.closed?
+        if process
+          begin
+            Process.kill('TERM', process.pid) if process.alive?
+          rescue Errno::ESRCH
+            # The relay exited between the liveness check and the signal.
+          end
+          process.join
+        end
       end
     end
   end
@@ -195,14 +231,8 @@ LEVELS = %w[DEBUG INFO WARN ERROR FATAL UNKNOWN].freeze
 #
 # 1. WSL2 in NAT networking mode can connect to the Windows VM via the default gateway. The WinRelay must listen on
 #    0.0.0.0, and all gpg-agent.exe ports must be proxied.
-# 2. WSL2 in mirrored networking mode, and WSL1, can connect to gpg_agent.exe on 127.0.0.1 directly. The WinRelay is
-#    would ideally not be needed in this case, but there is an issue with the SSH socket.
-#
-# gpg_agent.exe is unfortunately not responding on the SSH socket. The workaround is to use the PuTTY Pageant protocol.
-# This means that when SSH support is enabled, the WinRelay must always be started to proxy the ssh port.
-#
-# Summary: The WinRelay must be deployed, to proxy either all sockets when WSL2 is in NAT networking mode, or proxy the
-# SSH socket in all other cases.
+# 2. WSL2 in mirrored networking mode, and WSL1, can connect to gpg_agent.exe on 127.0.0.1 directly.
+# SSH uses npiperelay to reach Gpg4win's named pipe in every networking mode.
 
 options = {
   wsl_mode:           'wsl2_mirrored',
@@ -226,13 +256,13 @@ OptionParser.new do |opts|
       exit 1
     end
   end
-  opts.on('-s', '--[no-]enable-ssh-support', 'Enable proxying of gpg-agent SSH sockets') do |v|
+  opts.on('-s', '--[no-]enable-ssh-support', 'Relay SSH through the Gpg4win named pipe using npiperelay') do |v|
     options[:enable_ssh_support] = v
   end
-  opts.on('-r', '--remote-address IPADDR', String, "The remote address of the Windows bridge component [#{options[:remote_address]}]") do |v|
+  opts.on('-r', '--remote-address IPADDR', String, "The remote address of the Windows relay component [#{options[:remote_address]}]") do |v|
     options[:remote_address] = v
   end
-  opts.on('-p', '--port PORT', Integer, 'The first port (of three or four) to use for proxying sockets') do |v|
+  opts.on('-p', '--port PORT', Integer, 'The first of three ports used for GPG sockets') do |v|
     options[:port] = v
   end
   opts.on('-n', '--noncefile PATH', String, 'The nonce file path (defaults to file in Windows gpg homedir)') do |v|
@@ -260,8 +290,20 @@ end.parse!
 
 logger = get_logger options[:log_level]
 
-unless File.which('gpgconf.exe')
+def executable_on_path?(name)
+  ENV.fetch('PATH', '').split(File::PATH_SEPARATOR).any? do |directory|
+    path = File.join(directory, name)
+    File.file?(path) && File.executable?(path)
+  end
+end
+
+unless executable_on_path?('gpgconf.exe')
   logger.error {"cannot find gpgconf.exe in the PATH: #{ENV['PATH']}"}
+  exit 2
+end
+
+if options[:enable_ssh_support] && !executable_on_path?('npiperelay')
+  logger.error 'cannot find npiperelay in PATH; add the /usr/local/bin/npiperelay symlink'
   exit 2
 end
 
@@ -312,8 +354,7 @@ socket_names = {
   'agent-extra-socket'   => { port: first_port + 1, type: access_mode },
   'agent-browser-socket' => { port: first_port + 2, type: access_mode },
 }
-# SSH is always :relay for the Pageant workaround
-socket_names['agent-ssh-socket'] = { port: first_port + 3, type: :relay } if options[:enable_ssh_support]
+socket_names['agent-ssh-socket'] = { type: :ssh } if options[:enable_ssh_support]
 options[:socket_names] = socket_names
 
 logger.debug {"ssh support #{options[:enable_ssh_support]}"}
