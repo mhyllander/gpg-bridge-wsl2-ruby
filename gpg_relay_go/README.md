@@ -221,7 +221,7 @@ For example, to change the WSL mode or enable SSH support:
 
 ```ini
 [Service]
-ExecStart=/usr/local/bin/gpg_relay_wsl --enable-ssh-support --wsl-mode=wsl2_mirrored
+ExecStart=/usr/local/bin/gpg_relay_wsl --systemd --enable-ssh-support --wsl-mode=wsl2_mirrored
 ```
 
 ## Tips when using Remote Desktop
