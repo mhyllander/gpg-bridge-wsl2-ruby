@@ -1,0 +1,13 @@
+[Unit]
+Description=agent-socket
+
+[Socket]
+ListenStream=%t/gnupg/S.gpg-agent
+FileDescriptorName=agent-socket
+SocketMode=0600
+DirectoryMode=0700
+Accept=no
+Service=gpg-relay-agent.service
+
+[Install]
+WantedBy=sockets.target
