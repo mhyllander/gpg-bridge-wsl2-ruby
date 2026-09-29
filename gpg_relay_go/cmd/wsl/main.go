@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,7 +37,7 @@ func main() {
 }
 
 func run() error {
-	mode := flag.String("wsl-mode", "wsl2_mirrored", "wsl1, wsl2_nat, or wsl2_mirrored")
+	mode := flag.String("mode", "wsl2_mirrored", "GPG access mode: wsl1, wsl2_nat, wsl2_mirrored, or npiperelay")
 	ssh := flag.Bool("enable-ssh-support", false, "forward SSH through npiperelay")
 	remote := flag.String("remote-address", "", "Windows relay address (default: gateway in NAT mode, localhost otherwise)")
 	port := flag.Int("port", 6910, "first of three GPG relay ports")
@@ -46,13 +47,13 @@ func run() error {
 	activated := flag.Bool("systemd", false, "use systemd socket activation")
 	logLevel := flag.String("log-level", "WARN", "DEBUG, INFO, WARN, or ERROR")
 	flag.Parse()
-	if *mode != "wsl1" && *mode != "wsl2_nat" && *mode != "wsl2_mirrored" {
-		return fmt.Errorf("invalid WSL mode %q", *mode)
+	if *mode != "wsl1" && *mode != "wsl2_nat" && *mode != "wsl2_mirrored" && *mode != "npiperelay" {
+		return fmt.Errorf("invalid mode %q", *mode)
 	}
 	if *port < 1 || *port > 65533 {
 		return fmt.Errorf("invalid first port %d", *port)
 	}
-	if *ssh {
+	if *ssh || *mode == "npiperelay" {
 		if _, err := exec.LookPath("npiperelay"); err != nil {
 			return fmt.Errorf("cannot find npiperelay in PATH: %w", err)
 		}
@@ -197,7 +198,59 @@ func activatedListener(names []string, name string) (net.Listener, error) {
 	return nil, fmt.Errorf("missing systemd descriptor %s", name)
 }
 
+// socketPaths caches successful lookups for one listener. A failed lookup is retried.
+type socketPaths struct {
+	mu      sync.Mutex
+	windows string
+	wsl     string
+}
+
+func (p *socketPaths) windowsPath(name string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.windows != "" {
+		return p.windows, nil
+	}
+	path, err := relay.CommandOutput("gpgconf.exe", "--list-dirs", name)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("gpgconf.exe returned an empty path for %s", name)
+	}
+	p.windows = path
+	return path, nil
+}
+
+func (p *socketPaths) wslPath(name string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.wsl != "" {
+		return p.wsl, nil
+	}
+	if p.windows == "" {
+		path, err := relay.CommandOutput("gpgconf.exe", "--list-dirs", name)
+		if err != nil {
+			return "", err
+		}
+		if path == "" {
+			return "", fmt.Errorf("gpgconf.exe returned an empty path for %s", name)
+		}
+		p.windows = path
+	}
+	path, err := relay.CommandOutput("wslpath", "-u", p.windows)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("wslpath returned an empty path for %s", name)
+	}
+	p.wsl = path
+	return path, nil
+}
+
 func serve(ctx context.Context, listener net.Listener, s socket, mode, remote string, firstPort int, noncePath string, log *slog.Logger) {
+	paths := &socketPaths{}
 	for {
 		client, err := listener.Accept()
 		if err != nil {
@@ -208,7 +261,17 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 		}
 		go func() {
 			if s.ssh {
-				relaySSH(client, log)
+				relayNpiperelay(client, "-s", "//./pipe/openssh-ssh-agent", log)
+				return
+			}
+			if mode == "npiperelay" {
+				path, err := paths.windowsPath(s.name)
+				if err != nil {
+					log.Error("Windows socket path lookup failed", "socket", s.name, "error", err)
+					client.Close()
+					return
+				}
+				relayNpiperelay(client, "-a", path, log)
 				return
 			}
 			var upstream net.Conn
@@ -216,10 +279,7 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 			if mode == "wsl2_nat" {
 				upstream, dialErr = relay.DialWindows(remote, firstPort+s.offset, noncePath)
 			} else {
-				path, err := relay.CommandOutput("gpgconf.exe", "--list-dirs", s.name)
-				if err == nil {
-					path, err = relay.CommandOutput("wslpath", "-u", path)
-				}
+				path, err := paths.wslPath(s.name)
 				if err != nil {
 					dialErr = err
 				} else {
@@ -236,17 +296,17 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 	}
 }
 
-func relaySSH(client net.Conn, log *slog.Logger) {
+func relayNpiperelay(client net.Conn, targetFlag, targetPath string, log *slog.Logger) {
 	defer client.Close()
-	cmd := exec.Command("npiperelay", "-ei", "-s", "//./pipe/openssh-ssh-agent")
+	cmd := exec.Command("npiperelay", "-ei", targetFlag, targetPath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		log.Error("SSH stdin", "error", err)
+		log.Error("npiperelay stdin", "error", err)
 		return
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Error("SSH stdout", "error", err)
+		log.Error("npiperelay stdout", "error", err)
 		return
 	}
 	if err := cmd.Start(); err != nil {
@@ -257,7 +317,7 @@ func relaySSH(client net.Conn, log *slog.Logger) {
 	go func() { _, _ = io.Copy(stdin, client); _ = stdin.Close(); close(done) }()
 	_, err = io.Copy(client, stdout)
 	if err != nil {
-		log.Debug("SSH output closed", "error", err)
+		log.Debug("npiperelay output closed", "error", err)
 	}
 	if cw, ok := client.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
