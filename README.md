@@ -238,10 +238,10 @@ ordering and resource management.
    systemctl --user enable --now gpg-relay-agent-socket.socket gpg-relay-agent-extra-socket.socket gpg-relay-agent-browser-socket.socket gpg-relay-agent-ssh-socket.socket
    ```
 
-4. You may need to mask the gpg-agent socket units:
+4. You may need to mask the gpg-agent service and socket units:
 
    ```bash
-   systemctl --user mask gpg-agent.socket gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket
+   systemctl --user mask gpg-agent.service gpg-agent.socket gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket
    ```
 
 The service will now automatically start when any of the GPG sockets are

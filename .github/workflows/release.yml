@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
 
       - name: Build tar.gz
         run: tar zcf gpgrelay.tar.gz relay.rb gpg_relay_wsl.rb gpg_relay_win.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
@@ -22,34 +22,17 @@ jobs:
       - name: Build zip
         run: zip gpgrelay.zip relay.rb gpg_relay_wsl.rb gpg_relay_win.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
 
-      - name: Create release
+      - name: Release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          name: Release ${{ github.ref }}
           body_path: ReleaseNotes.md
           draft: false
           prerelease: ${{ contains(github.ref, '-pre') }}
-
-      - name: Upload tar.gz
-        uses: actions/upload-release-asset@v1
+          files: |-
+            gpgbridge.tar.gz
+            gpgbridge.zip"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: gpgbridge.tar.gz
-          asset_name: gpgbridge.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload zip
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: gpgbridge.zip
-          asset_name: gpgbridge.zip
-          asset_content_type: application/zip

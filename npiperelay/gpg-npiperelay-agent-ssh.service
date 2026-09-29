@@ -11,7 +11,7 @@ Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=gpg-npiperelay-agent
+SyslogIdentifier=gpg-npiperelay-agent-ssh
 
 [Install]
 WantedBy=default.target

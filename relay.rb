@@ -31,8 +31,8 @@ class Relay
   def relay(client, server)
     Thread.new do
       directions = [
-        Thread.new { copy_direction(client, server) },
-        Thread.new { copy_direction(server, client) },
+        Thread.new {copy_direction(client, server)},
+        Thread.new {copy_direction(server, client)},
       ]
       directions.each(&:join)
     ensure
@@ -46,7 +46,7 @@ class Relay
 
   def copy_direction(source, destination)
     copied = IO.copy_stream(source, destination)
-    @logger.debug { "copied #{copied} bytes before EOF" }
+    @logger.debug {"copied #{copied} bytes before EOF"}
     destination.shutdown(Socket::SHUT_WR)
   rescue IOError, SystemCallError => e
     @logger.error "socket relay failed: #{e.inspect}"
@@ -57,6 +57,6 @@ class Relay
   def close_socket(socket)
     socket.close unless socket.closed?
   rescue IOError, SystemCallError => e
-    @logger.debug { "socket close failed: #{e.inspect}" }
+    @logger.debug {"socket close failed: #{e.inspect}"}
   end
 end

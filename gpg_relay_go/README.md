@@ -123,7 +123,7 @@ This ensures that only local processes that can read the nonce file can
 authenticate with the Win Relay. Other connections will fail, which means
 that connections from other computers on the LAN will be rejected.
 
-## Installation
+## Building
 
 Build from this directory with Go 1.22 or newer:
 
@@ -219,10 +219,10 @@ ordering and resource management.
    systemctl --user enable --now gpg-relay-agent-socket.socket gpg-relay-agent-extra-socket.socket gpg-relay-agent-browser-socket.socket gpg-relay-agent-ssh-socket.socket
    ```
 
-4. You may need to mask the gpg-agent socket units:
+4. You may need to mask the gpg-agent service and socket units:
 
    ```bash
-   systemctl --user mask gpg-agent.socket gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket
+   systemctl --user mask gpg-agent.service gpg-agent.socket gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket
    ```
 
 The service will now automatically start when any of the GPG sockets are
