@@ -17,14 +17,28 @@ class NpiperelayIntegrationTest < Minitest::Test
     executable('ruby.exe', "#!/bin/sh\nexit 0\n")
     executable('gpg-agent.exe', "#!/bin/sh\nexit 0\n")
     executable('gpg-connect-agent.exe', "#!/bin/sh\nexit 0\n")
-    executable('gpgconf.exe', "#!/bin/sh\nprintf '%s\\n' \"$TEST_ASSUAN_PATH\"\n")
+    executable('gpgconf.exe', <<~SH)
+      #!/bin/sh
+      printf '%s\n' "$2" >> "$TEST_GPGCONF_CALLS"
+      if [ -n "$TEST_GPG_SOCKET_PATHS" ]; then
+        printf '%s/%s\n' "$TEST_ASSUAN_PATH" "$2"
+      else
+        printf '%s\n' "$TEST_ASSUAN_PATH"
+      fi
+    SH
     executable('gpgconf', "#!/bin/sh\nprintf '%s/%s\\n' \"$TEST_SOCK_DIR\" \"$2\"\n")
     executable('wslpath', "#!/bin/sh\nprintf '%s\\n' \"$2\"\n")
     executable('ip', "#!/bin/sh\nprintf 'default via 127.0.0.1 dev eth0\\n'\n")
     executable('npiperelay', <<~RUBY)
       #!/usr/bin/ruby
-      exit 7 unless ARGV == ['-ei', '-s', '//./pipe/openssh-ssh-agent']
+      valid_ssh = ARGV == ['-ei', '-s', '//./pipe/openssh-ssh-agent']
+      gpg_sockets = %w[agent-socket agent-extra-socket agent-browser-socket]
+      valid_gpg = ARGV.length == 3 && ARGV[0..1] == ['-ei', '-a'] &&
+                  ARGV[2].start_with?(ENV.fetch('TEST_ASSUAN_PATH') + '/') &&
+                  gpg_sockets.include?(File.basename(ARGV[2]))
+      exit 7 unless valid_ssh || valid_gpg
       File.open(ENV.fetch('TEST_CHILD_PIDS'), 'a') { |f| f.puts Process.pid }
+      File.open(ENV.fetch('TEST_CHILD_ARGS'), 'a') { |f| f.puts ARGV.join(' ') }
       begin
         loop do
           data = STDIN.readpartial(4096)
@@ -38,6 +52,8 @@ class NpiperelayIntegrationTest < Minitest::Test
       'PATH' => "#{@bin}:/usr/bin:/bin",
       'TEST_SOCK_DIR' => @dir,
       'TEST_CHILD_PIDS' => File.join(@dir, 'pids'),
+      'TEST_CHILD_ARGS' => File.join(@dir, 'args'),
+      'TEST_GPGCONF_CALLS' => File.join(@dir, 'gpgconf-calls'),
       'TEST_ASSUAN_PATH' => File.join(@dir, 'assuan')
     }
     @relay_pid = nil
@@ -128,6 +144,59 @@ class NpiperelayIntegrationTest < Minitest::Test
     server&.close
   end
 
+  def test_npiperelay_gpg_forwards_concurrent_clients_and_closes_children
+    start_relay(false, 'npiperelay')
+    path = File.join(@dir, 'agent-socket')
+    wait_for_socket(path)
+    payloads = ['first' * 100, 'second' * 100]
+    workers = payloads.map do |payload|
+      Thread.new do
+        UNIXSocket.open(path) do |client|
+          client.write(payload)
+          client.shutdown(Socket::SHUT_WR)
+          assert_equal payload, Timeout.timeout(5) { client.read }
+        end
+      end
+    end
+    Timeout.timeout(5) { workers.each(&:value) }
+    assert_children_exit(2)
+    assert_equal 2, File.readlines(@env['TEST_CHILD_ARGS']).count { |line| line.include?('-a ' + @env['TEST_ASSUAN_PATH'] + '/agent-socket') }
+    assert_equal 1, File.readlines(@env['TEST_GPGCONF_CALLS']).count { |line| line.chomp == 'agent-socket' }
+  end
+
+  def test_npiperelay_gpg_works_without_ssh_support
+    start_relay(false, 'npiperelay', nil, false)
+    path = File.join(@dir, 'agent-extra-socket')
+    wait_for_socket(path)
+    UNIXSocket.open(path) do |client|
+      client.write('gpg request')
+      client.shutdown(Socket::SHUT_WR)
+      assert_equal 'gpg request', Timeout.timeout(5) { client.read }
+    end
+    assert_children_exit(1)
+    assert_includes File.read(@env['TEST_CHILD_ARGS']), '-a ' + @env['TEST_ASSUAN_PATH'] + '/agent-extra-socket'
+  end
+
+  def test_systemd_activated_listener_forwards_gpg_with_npiperelay
+    path = File.join(@dir, 'activated-gpg.sock')
+    @listen_socket = UNIXServer.new(path)
+    start_relay(true, 'npiperelay', nil, false, 'agent-browser-socket')
+    UNIXSocket.open(path) do |client|
+      client.write('activated gpg')
+      client.shutdown(Socket::SHUT_WR)
+      assert_equal 'activated gpg', Timeout.timeout(5) { client.read }
+    end
+    assert_children_exit(1)
+    assert_includes File.read(@env['TEST_CHILD_ARGS']), '-a ' + @env['TEST_ASSUAN_PATH'] + '/agent-browser-socket'
+  end
+
+  def test_missing_npiperelay_in_gpg_mode_reports_error
+    File.unlink(File.join(@bin, 'npiperelay'))
+    output = IO.popen(@env, ['/usr/bin/ruby', WSL, '--mode', 'npiperelay', '--noncefile', File.join(@dir, 'nonce')], err: [:child, :out], &:read)
+    refute $?.success?
+    assert_includes output, 'cannot find npiperelay in PATH'
+  end
+
   def test_windows_relay_opens_only_three_gpg_ports
     probe = TCPServer.new('127.0.0.1', 0)
     first_port = probe.addr[1]
@@ -172,12 +241,14 @@ class NpiperelayIntegrationTest < Minitest::Test
     File.chmod(0o755, path)
   end
 
-  def start_relay(systemd = false, mode = 'wsl2_mirrored', port = nil)
+  def start_relay(systemd = false, mode = 'wsl2_mirrored', port = nil, ssh = true, listen_name = 'agent-ssh-socket')
     env = @env.dup
-    args = ['/usr/bin/ruby', WSL, '--enable-ssh-support', '--noncefile', File.join(@dir, 'nonce'), '--wsl-mode', mode]
+    env['TEST_GPG_SOCKET_PATHS'] = '1' if mode == 'npiperelay'
+    args = ['/usr/bin/ruby', WSL, '--noncefile', File.join(@dir, 'nonce'), '--mode', mode]
+    args << '--enable-ssh-support' if ssh
     args.concat(['--port', port.to_s]) if port
     if systemd
-      env['LISTEN_FDNAMES'] = 'agent-ssh-socket'
+      env['LISTEN_FDNAMES'] = listen_name
       env['LISTEN_FDS'] = '1'
       args << '--systemd'
       @relay_pid = Process.spawn(env, *args, 3 => @listen_socket, out: File::NULL, err: File.join(@dir, 'relay.log'))
