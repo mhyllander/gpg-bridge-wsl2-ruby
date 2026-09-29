@@ -93,12 +93,12 @@ end
 LEVELS = %w[DEBUG INFO WARN ERROR FATAL UNKNOWN].freeze
 
 options = {
-  port:               FIRST_PORT,
-  noncefile:          nil,
-  log_level:          'WARN',
-  windows_address:    '127.0.0.1',
-  windows_logfile:    nil,
-  windows_pidfile:    nil,
+  port:            FIRST_PORT,
+  noncefile:       nil,
+  log_level:       'WARN',
+  windows_address: '127.0.0.1',
+  windows_logfile: nil,
+  windows_pidfile: nil,
 }
 
 OptionParser.new do |opts|

@@ -153,7 +153,7 @@ class WslRelay < Relay
       ensure
         client.close unless client.closed?
         output.close if output && !output.closed?
-        writer.join if writer
+        writer&.join
         input.close if input && !input.closed?
         if process
           begin

@@ -1,5 +1,3 @@
-require 'socket'
-
 class Relay
   def initialize(options, logger)
     @options = options
