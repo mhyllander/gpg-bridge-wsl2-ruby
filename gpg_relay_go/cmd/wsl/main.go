@@ -251,6 +251,7 @@ func (p *socketPaths) wslPath(name string) (string, error) {
 
 func serve(ctx context.Context, listener net.Listener, s socket, mode, remote string, firstPort int, noncePath string, log *slog.Logger) {
 	paths := &socketPaths{}
+	var sshRequests chan sshRequest
 	for {
 		client, err := listener.Accept()
 		if err != nil {
@@ -259,11 +260,15 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 			}
 			return
 		}
-		go func() {
-			if s.ssh {
-				relayNpiperelay(client, []string{"-p", "-l", "-s", "-ei"}, "//./pipe/openssh-ssh-agent", log)
-				return
+		if s.ssh {
+			if sshRequests == nil {
+				sshRequests = make(chan sshRequest)
+				go serveSSHRequests(ctx, sshRequests, log)
 			}
+			go serveSSHClient(ctx, client, sshRequests)
+			continue
+		}
+		go func() {
 			if mode == "npiperelay" {
 				path, err := paths.windowsPath(s.name)
 				if err != nil {

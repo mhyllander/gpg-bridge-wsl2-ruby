@@ -11,6 +11,7 @@ require 'logger'
 require 'open3'
 
 require_relative 'relay'
+require_relative 'ssh_relay'
 
 FIRST_PORT = 6910
 
@@ -25,6 +26,7 @@ class WslRelay < Relay
     @windows_assuan_socket_paths = {}
     @windows_gpg_socket_paths_mutex = Mutex.new
     @windows_assuan_socket_paths_mutex = Mutex.new
+    @ssh_relay = SSHRelay.new(@logger) if options[:socket_names].values.any? { |config| config[:type] == :ssh }
 
     # setup cleanup handlers
     at_exit {cleanup}
@@ -57,6 +59,7 @@ class WslRelay < Relay
   end
 
   def cleanup
+    @ssh_relay&.close
     File.unlink @pidfile if @pidfile
     # Close listen fds when using systemd socket activation
     if systemd_enabled?
@@ -112,7 +115,7 @@ class WslRelay < Relay
 
   def handle_client(client, remote_address, config, noncefile, assuan_socket_path, socket_name)
     if config[:type] == :ssh
-      relay_npiperelay(client, ['-p', '-l', '-s', '-ei'], '//./pipe/openssh-ssh-agent', 'SSH pipe')
+      @ssh_relay.accept(client)
       return
     end
     if config[:type] == :npiperelay

@@ -24,9 +24,11 @@ these sockets directly. WSL2 NAT mode uses the Win Relay for GPG traffic.
 The `npiperelay` mode opens the Windows Assuan sockets through a Windows
 process, independent of the WSL networking mode.
 
-For SSH, the WSL Relay starts `npiperelay -ei -s
-//./pipe/openssh-ssh-agent` for each client and forwards bytes to
-Gpg4win's named pipe. SSH traffic never passes through the Win Relay.
+For SSH, the WSL Relay starts one `npiperelay` when the first client connects. It queues
+length-prefixed SSH agent requests from all clients and forwards one request
+and response at a time. It stops the shared process after 60 seconds without
+a request, measured from the last completed response. The next request starts
+a new process. SSH traffic never passes through the Win Relay.
  Gpg4win's gpg-agent must be configured with `enable-ssh-support` and
  `enable-win32-openssh-support`.
 
@@ -85,8 +87,8 @@ starts one `npiperelay` process per GPG client connection.
   over TCP. The Win Relay connects to Gpg4win's Assuan sockets.
 - **GPG access through npiperelay** (`npiperelay`): The WSL Relay starts
   `npiperelay` on the Windows Assuan socket path for each GPG connection.
-- **SSH access** (all modes): The WSL Relay starts `npiperelay` on
-  Gpg4win's `//./pipe/openssh-ssh-agent`.
+- **SSH access** (all modes): The WSL Relay shares one `npiperelay`
+  process for Gpg4win's `//./pipe/openssh-ssh-agent` across SSH clients.
 
 ### Authentication
 
@@ -104,8 +106,8 @@ The **npiperelay** mode runs a Windows process to connect to the local
 Assuan socket. None of these modes requires a firewall change.
 
 **WSL2 NAT** mode requires a Windows Firewall rule to allow incoming
-connections to the Win Relay. A firewall rule must allow incoming connections to `gpg_relay_win.exe`
-on the three configured ports.
+connections to the Win Relay. A firewall rule must allow incoming connections
+to `gpg_relay_win.exe` on the three configured ports.
 
 Specifically, add an incoming rule for the Public profile that allows
 connections from `172.16.0.0/12` and `192.168.0.0/16` to TCP ports
@@ -247,6 +249,22 @@ For example, to change the access mode or enable SSH support:
 [Service]
 ExecStart=/usr/local/bin/gpg_relay_wsl --systemd --enable-ssh-support --mode=wsl2_mirrored
 ```
+
+## A note about gpg-agent.exe and its support for SSH
+
+1. The ssh Assuan port does not appear to work. gpg-agent.exe closes the connection immediately after receiving the request.
+
+2. The PuTTY Pageant protocol works, but requires getting a handle on a hidden window, which requires a program to be running in Windows. It cannot be done from WSL.
+
+3. `enable-win32-openssh-support` instructs gpg-agent.exe to create the
+Windows Named Pipe, which can be used
+to handle ssh-agent requests with the help of npiperelay. However, the
+implementation appears to be limited: gpg-agent.exe cannot handle multiple
+simultaneous requests. If multiple npiperelay processes are started at the
+same time, most of them will fail to connect with "pipe busy" errors, and
+gpg-agent.exe does not appear to recover. The solution to this is to keep
+one single npiperelay process running that can process SSH requests from
+multiple clients and return the responses.
 
 ## Tips when using Remote Desktop
 

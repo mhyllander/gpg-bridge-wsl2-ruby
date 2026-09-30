@@ -31,7 +31,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     executable('ip', "#!/bin/sh\nprintf 'default via 127.0.0.1 dev eth0\\n'\n")
     executable('npiperelay', <<~RUBY)
       #!/usr/bin/ruby
-      valid_ssh = ARGV == ['-p', '-l', '-s', '-ei', '//./pipe/openssh-ssh-agent']
+      valid_ssh = ARGV == ['-p', '-l', '-s', '-ei', '-ep', '//./pipe/openssh-ssh-agent']
       gpg_sockets = %w[agent-socket agent-extra-socket agent-browser-socket]
       valid_gpg = ARGV.length == 4 && ARGV[0..2] == ['-a', '-ei', '-ep'] &&
                   ARGV[3].start_with?(ENV.fetch('TEST_ASSUAN_PATH') + '/') &&
@@ -40,10 +40,22 @@ class NpiperelayIntegrationTest < Minitest::Test
       File.open(ENV.fetch('TEST_CHILD_PIDS'), 'a') { |f| f.puts Process.pid }
       File.open(ENV.fetch('TEST_CHILD_ARGS'), 'a') { |f| f.puts ARGV.join(' ') }
       begin
-        loop do
-          data = STDIN.readpartial(4096)
-          STDOUT.write(data)
-          STDOUT.flush
+        if valid_ssh
+          loop do
+            header = STDIN.read(4)
+            break unless header && header.bytesize == 4
+            length = header.unpack1('N')
+            body = STDIN.read(length)
+            break unless body && body.bytesize == length
+            STDOUT.write(header + body)
+            STDOUT.flush
+          end
+        else
+          loop do
+            data = STDIN.readpartial(4096)
+            STDOUT.write(data)
+            STDOUT.flush
+          end
         end
       rescue EOFError
       end
@@ -68,22 +80,22 @@ class NpiperelayIntegrationTest < Minitest::Test
     FileUtils.remove_entry(@dir)
   end
 
-  def test_ordinary_listener_handles_concurrent_clients_and_closes_children
+  def test_ordinary_listener_reuses_one_ssh_child_for_concurrent_and_persistent_clients
     start_relay
     path = File.join(@dir, 'agent-ssh-socket')
     wait_for_socket(path)
-    payloads = [('first' * 100), ('second' * 100)]
-    workers = payloads.map do |payload|
+    workers = %w[first second third fourth].map do |payload|
       Thread.new do
         UNIXSocket.open(path) do |client|
-          client.write(payload)
-          client.shutdown(Socket::SHUT_WR)
-          assert_equal payload, client.read
+          assert_equal payload, ssh_exchange(client, payload)
+          assert_equal payload + ' again', ssh_exchange(client, payload + ' again')
         end
       end
     end
-    Timeout.timeout(5) {workers.each(&:value)}
-    assert_children_exit(2)
+    Timeout.timeout(5) { workers.each(&:value) }
+    assert_equal 1, File.readlines(@env['TEST_CHILD_PIDS']).length
+    stop_relay
+    assert_children_exit(1)
   end
 
   def test_systemd_activated_listener_forwards_ssh
@@ -91,10 +103,9 @@ class NpiperelayIntegrationTest < Minitest::Test
     @listen_socket = UNIXServer.new(path)
     start_relay(true)
     UNIXSocket.open(path) do |client|
-      client.write('hello through fd')
-      client.shutdown(Socket::SHUT_WR)
-      assert_equal 'hello through fd', Timeout.timeout(5) {client.read}
+      assert_equal 'hello through fd', ssh_exchange(client, 'hello through fd')
     end
+    stop_relay
     assert_children_exit(1)
   end
 
@@ -232,6 +243,18 @@ class NpiperelayIntegrationTest < Minitest::Test
   end
 
   private
+
+  def ssh_exchange(client, payload)
+    client.write([payload.bytesize].pack('N') + payload)
+    header = Timeout.timeout(5) { client.read(4) }
+    raise 'missing SSH response header' unless header && header.bytesize == 4
+
+    length = header.unpack1('N')
+    response = Timeout.timeout(5) { client.read(length) }
+    raise 'incomplete SSH response' unless response && response.bytesize == length
+
+    response
+  end
 
   def executable(name, body)
     path = File.join(@bin, name)

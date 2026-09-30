@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -116,24 +117,58 @@ func TestDirectAndNATForwarding(t *testing.T) {
 	}
 }
 
-func TestSSHForwarding(t *testing.T) {
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "bin")
-	os.Mkdir(bin, 0755)
-	os.WriteFile(filepath.Join(bin, "npiperelay"), []byte("#!/bin/sh\n[ \"$*\" = '-p -l -s -ei //./pipe/openssh-ssh-agent' ] || exit 2\nexec /bin/cat\n"), 0755)
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
-	client, err := net.Dial("unix", path)
+func sshExchange(t *testing.T, client net.Conn, payload string) string {
+	t.Helper()
+	packet := make([]byte, 4+len(payload))
+	binary.BigEndian.PutUint32(packet, uint32(len(payload)))
+	copy(packet[4:], payload)
+	if _, err := client.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	response, err := readSSHPacket(client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	client.SetDeadline(time.Now().Add(3 * time.Second))
-	client.Write([]byte("hello"))
-	client.(*net.UnixConn).CloseWrite()
-	answer, err := io.ReadAll(client)
-	if err != nil || string(answer) != "hello" {
-		t.Fatalf("SSH answer %q: %v", answer, err)
+	return string(response[4:])
+}
+
+func TestSSHForwarding(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	launches := filepath.Join(dir, "launches")
+	fake := "#!/usr/bin/env python3\nimport os,sys,struct\nwith open(os.environ['TEST_LAUNCHES'],'a') as f: f.write(str(os.getpid())+'\\n')\nwhile True:\n h=sys.stdin.buffer.read(4)\n if len(h)<4: break\n n=struct.unpack('>I',h)[0]\n body=sys.stdin.buffer.read(n)\n if len(body)<n: break\n sys.stdout.buffer.write(h+body)\n sys.stdout.buffer.flush()\n"
+	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte(fake), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("TEST_LAUNCHES", launches)
+	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
+	if _, err := os.Stat(launches); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("started before accept: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		client, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.SetDeadline(time.Now().Add(3 * time.Second))
+		if got := sshExchange(t, client, "first"); got != "first" {
+			t.Fatal(got)
+		}
+		if got := sshExchange(t, client, "second"); got != "second" {
+			t.Fatal(got)
+		}
+		client.Close()
+	}
+	data, err := os.ReadFile(launches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.Fields(string(data))) != 1 {
+		t.Fatalf("process launches: %q", data)
 	}
 }
 
@@ -459,10 +494,13 @@ func TestConcurrentSSHClients(t *testing.T) {
 	if err := os.Mkdir(bin, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte("#!/bin/sh\nexec /bin/cat\n"), 0755); err != nil {
+	launches := filepath.Join(dir, "launches")
+	fake := "#!/usr/bin/env python3\nimport os,sys,struct\nwith open(os.environ['TEST_LAUNCHES'],'a') as f: f.write(str(os.getpid())+'\\n')\nwhile True:\n h=sys.stdin.buffer.read(4)\n if len(h)<4: break\n n=struct.unpack('>I',h)[0]\n body=sys.stdin.buffer.read(n)\n if len(body)<n: break\n sys.stdout.buffer.write(h+body)\n sys.stdout.buffer.flush()\n"
+	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte(fake), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("TEST_LAUNCHES", launches)
 	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
 	results := make(chan error, 4)
 	for i := 0; i < 4; i++ {
@@ -475,14 +513,16 @@ func TestConcurrentSSHClients(t *testing.T) {
 			defer client.Close()
 			client.SetDeadline(time.Now().Add(3 * time.Second))
 			payload := "client-" + strconv.Itoa(i)
-			if _, err := client.Write([]byte(payload)); err != nil {
+			packet := make([]byte, 4+len(payload))
+			binary.BigEndian.PutUint32(packet, uint32(len(payload)))
+			copy(packet[4:], payload)
+			if _, err := client.Write(packet); err != nil {
 				results <- err
 				return
 			}
-			client.(*net.UnixConn).CloseWrite()
-			response, err := io.ReadAll(client)
-			if err == nil && string(response) != payload {
-				err = fmt.Errorf("got %q, want %q", response, payload)
+			response, err := readSSHPacket(client)
+			if err == nil && string(response[4:]) != payload {
+				err = fmt.Errorf("got %q, want %q", response[4:], payload)
 			}
 			results <- err
 		}(i)
@@ -492,4 +532,227 @@ func TestConcurrentSSHClients(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	data, err := os.ReadFile(launches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.Fields(string(data))) != 1 {
+		t.Fatalf("process launches: %q", data)
+	}
+}
+
+func TestSSHRestartAfterExit(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	launches := filepath.Join(dir, "launches")
+	fake := "#!/usr/bin/env python3\nimport os,sys,struct\nwith open(os.environ['TEST_LAUNCHES'],'a') as f: f.write(str(os.getpid())+'\\n')\nh=sys.stdin.buffer.read(4)\nif len(h)==4:\n n=struct.unpack('>I',h)[0]\n body=sys.stdin.buffer.read(n)\n sys.stdout.buffer.write(h+body)\n sys.stdout.buffer.flush()\n"
+	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte(fake), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("TEST_LAUNCHES", launches)
+	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
+	for i := 0; i < 2; i++ {
+		client, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.SetDeadline(time.Now().Add(3 * time.Second))
+		if got := sshExchange(t, client, "hello"); got != "hello" {
+			t.Fatal(got)
+		}
+		client.Close()
+		if i == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	data, err := os.ReadFile(launches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.Fields(string(data))) != 2 {
+		t.Fatalf("process launches: %q", data)
+	}
+}
+
+func TestSSHDisconnectDrainsResponse(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	launches := filepath.Join(dir, "launches")
+	fake := "#!/usr/bin/env python3\nimport os,sys,struct,time\nwith open(os.environ['TEST_LAUNCHES'],'a') as f: f.write(str(os.getpid())+'\\n')\nwhile True:\n h=sys.stdin.buffer.read(4)\n if len(h)<4: break\n n=struct.unpack('>I',h)[0]\n body=sys.stdin.buffer.read(n)\n if body==b'first': time.sleep(.15)\n sys.stdout.buffer.write(h+body)\n sys.stdout.buffer.flush()\n"
+	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte(fake), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("TEST_LAUNCHES", launches)
+	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
+	first, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := []byte{0, 0, 0, 5, 'f', 'i', 'r', 's', 't'}
+	if _, err := first.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	first.Close()
+	second, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	second.SetDeadline(time.Now().Add(3 * time.Second))
+	if got := sshExchange(t, second, "second"); got != "second" {
+		t.Fatal(got)
+	}
+	data, err := os.ReadFile(launches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.Fields(string(data))) != 1 {
+		t.Fatalf("process launches: %q", data)
+	}
+}
+
+func TestSSHProcessStopsOnShutdown(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	pidFile := filepath.Join(dir, "pid")
+	fake := "#!/usr/bin/env python3\nimport os,sys,time\nwith open(os.environ['TEST_PID_FILE'],'w') as f: f.write(str(os.getpid()))\nwhile True: time.sleep(1)\n"
+	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte(fake), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("TEST_PID_FILE", pidFile)
+	listener, err := net.Listen("unix", filepath.Join(dir, "listen.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go serve(ctx, listener, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "", slog.Default())
+	client, err := net.Dial("unix", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var pid int
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, err = strconv.Atoi(string(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("npiperelay did not start")
+	}
+	cancel()
+	listener.Close()
+	for time.Now().Before(deadline) {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("npiperelay %d still running", pid)
+}
+
+func TestSSHIdleTimeout(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	launches := filepath.Join(dir, "launches")
+	fake := "#!/usr/bin/env python3\nimport os,sys,struct,time\nwith open(os.environ['TEST_LAUNCHES'],'a') as f: f.write(str(os.getpid())+'\\n')\nwhile True:\n h=sys.stdin.buffer.read(4)\n if len(h)<4: break\n n=struct.unpack('>I',h)[0]\n body=sys.stdin.buffer.read(n)\n if body==b'slow': time.sleep(.35)\n sys.stdout.buffer.write(h+body)\n sys.stdout.buffer.flush()\n"
+	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte(fake), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("TEST_LAUNCHES", launches)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	requests := make(chan sshRequest)
+	go serveSSHRequestsWithTimeout(ctx, requests, slog.Default(), 150*time.Millisecond)
+	newClient := func() net.Conn {
+		server, client := net.Pipe()
+		go serveSSHClient(ctx, server, requests)
+		client.SetDeadline(time.Now().Add(3 * time.Second))
+		return client
+	}
+	waitLaunches := func(want int) []int {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			data, _ := os.ReadFile(launches)
+			fields := strings.Fields(string(data))
+			if len(fields) >= want {
+				pids := make([]int, len(fields))
+				for i, field := range fields {
+					var err error
+					pids[i], err = strconv.Atoi(field)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				return pids
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("expected %d launches", want)
+		return nil
+	}
+	pids := waitLaunches(1)
+	first := newClient()
+	if got := sshExchange(t, first, "first"); got != "first" {
+		t.Fatal(got)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if got := sshExchange(t, first, "second"); got != "second" {
+		t.Fatal(got)
+	}
+	pids = waitLaunches(1)
+	if len(pids) != 1 {
+		t.Fatalf("restarted while active: %v", pids)
+	}
+	// A response taking longer than the idle timeout must not interrupt the request.
+	if got := sshExchange(t, first, "slow"); got != "slow" {
+		t.Fatal(got)
+	}
+	pids = waitLaunches(1)
+	if len(pids) != 1 {
+		t.Fatalf("restarted during request: %v", pids)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if errors.Is(syscall.Kill(pids[0], 0), syscall.ESRCH) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !errors.Is(syscall.Kill(pids[0], 0), syscall.ESRCH) {
+		t.Fatal("idle process still alive")
+	}
+	if got := sshExchange(t, first, "after-idle"); got != "after-idle" {
+		t.Fatal(got)
+	}
+	pids = waitLaunches(2)
+	if pids[0] == pids[1] {
+		t.Fatalf("same process after idle: %v", pids)
+	}
+	first.Close()
 }
