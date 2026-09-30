@@ -261,7 +261,7 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 		}
 		go func() {
 			if s.ssh {
-				relayNpiperelay(client, []string{"-p", "-s"}, "//./pipe/openssh-ssh-agent", log)
+				relayNpiperelay(client, []string{"-p", "-l", "-s", "-ei"}, "//./pipe/openssh-ssh-agent", log)
 				return
 			}
 			if mode == "npiperelay" {
@@ -271,7 +271,7 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 					client.Close()
 					return
 				}
-				relayNpiperelay(client, []string{"-a"}, path, log)
+				relayNpiperelay(client, []string{"-a", "-ei", "-ep"}, path, log)
 				return
 			}
 			var upstream net.Conn
@@ -298,8 +298,7 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 
 func relayNpiperelay(client net.Conn, targetFlags []string, targetPath string, log *slog.Logger) {
 	defer client.Close()
-	args := append([]string{"-ep", "-ei"}, targetFlags...)
-	args = append(args, targetPath)
+	args := append(targetFlags, targetPath)
 	cmd := exec.Command("npiperelay", args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

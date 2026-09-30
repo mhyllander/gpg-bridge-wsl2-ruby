@@ -31,11 +31,11 @@ class NpiperelayIntegrationTest < Minitest::Test
     executable('ip', "#!/bin/sh\nprintf 'default via 127.0.0.1 dev eth0\\n'\n")
     executable('npiperelay', <<~RUBY)
       #!/usr/bin/ruby
-      valid_ssh = ARGV == ['-ei', '-s', '//./pipe/openssh-ssh-agent']
+      valid_ssh = ARGV == ['-p', '-l', '-s', '-ei', '//./pipe/openssh-ssh-agent']
       gpg_sockets = %w[agent-socket agent-extra-socket agent-browser-socket]
-      valid_gpg = ARGV.length == 3 && ARGV[0..1] == ['-ei', '-a'] &&
-                  ARGV[2].start_with?(ENV.fetch('TEST_ASSUAN_PATH') + '/') &&
-                  gpg_sockets.include?(File.basename(ARGV[2]))
+      valid_gpg = ARGV.length == 4 && ARGV[0..2] == ['-a', '-ei', '-ep'] &&
+                  ARGV[3].start_with?(ENV.fetch('TEST_ASSUAN_PATH') + '/') &&
+                  gpg_sockets.include?(File.basename(ARGV[3]))
       exit 7 unless valid_ssh || valid_gpg
       File.open(ENV.fetch('TEST_CHILD_PIDS'), 'a') { |f| f.puts Process.pid }
       File.open(ENV.fetch('TEST_CHILD_ARGS'), 'a') { |f| f.puts ARGV.join(' ') }
@@ -49,12 +49,12 @@ class NpiperelayIntegrationTest < Minitest::Test
       end
     RUBY
     @env = {
-      'PATH' => "#{@bin}:/usr/bin:/bin",
-      'TEST_SOCK_DIR' => @dir,
-      'TEST_CHILD_PIDS' => File.join(@dir, 'pids'),
-      'TEST_CHILD_ARGS' => File.join(@dir, 'args'),
+      'PATH'               => "#{@bin}:/usr/bin:/bin",
+      'TEST_SOCK_DIR'      => @dir,
+      'TEST_CHILD_PIDS'    => File.join(@dir, 'pids'),
+      'TEST_CHILD_ARGS'    => File.join(@dir, 'args'),
       'TEST_GPGCONF_CALLS' => File.join(@dir, 'gpgconf-calls'),
-      'TEST_ASSUAN_PATH' => File.join(@dir, 'assuan')
+      'TEST_ASSUAN_PATH'   => File.join(@dir, 'assuan'),
     }
     @relay_pid = nil
     @listen_socket = nil
@@ -72,7 +72,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     start_relay
     path = File.join(@dir, 'agent-ssh-socket')
     wait_for_socket(path)
-    payloads = [("first" * 100), ("second" * 100)]
+    payloads = [('first' * 100), ('second' * 100)]
     workers = payloads.map do |payload|
       Thread.new do
         UNIXSocket.open(path) do |client|
@@ -82,7 +82,7 @@ class NpiperelayIntegrationTest < Minitest::Test
         end
       end
     end
-    Timeout.timeout(5) { workers.each(&:value) }
+    Timeout.timeout(5) {workers.each(&:value)}
     assert_children_exit(2)
   end
 
@@ -93,7 +93,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     UNIXSocket.open(path) do |client|
       client.write('hello through fd')
       client.shutdown(Socket::SHUT_WR)
-      assert_equal 'hello through fd', Timeout.timeout(5) { client.read }
+      assert_equal 'hello through fd', Timeout.timeout(5) {client.read}
     end
     assert_children_exit(1)
   end
@@ -154,14 +154,14 @@ class NpiperelayIntegrationTest < Minitest::Test
         UNIXSocket.open(path) do |client|
           client.write(payload)
           client.shutdown(Socket::SHUT_WR)
-          assert_equal payload, Timeout.timeout(5) { client.read }
+          assert_equal payload, Timeout.timeout(5) {client.read}
         end
       end
     end
-    Timeout.timeout(5) { workers.each(&:value) }
+    Timeout.timeout(5) {workers.each(&:value)}
     assert_children_exit(2)
-    assert_equal 2, File.readlines(@env['TEST_CHILD_ARGS']).count { |line| line.include?('-a ' + @env['TEST_ASSUAN_PATH'] + '/agent-socket') }
-    assert_equal 1, File.readlines(@env['TEST_GPGCONF_CALLS']).count { |line| line.chomp == 'agent-socket' }
+    assert_equal(2, File.readlines(@env['TEST_CHILD_ARGS']).count {|line| line.include?('-a -ei -ep ' + @env['TEST_ASSUAN_PATH'] + '/agent-socket')})
+    assert_equal(1, File.readlines(@env['TEST_GPGCONF_CALLS']).count {|line| line.chomp == 'agent-socket'})
   end
 
   def test_npiperelay_gpg_works_without_ssh_support
@@ -171,10 +171,10 @@ class NpiperelayIntegrationTest < Minitest::Test
     UNIXSocket.open(path) do |client|
       client.write('gpg request')
       client.shutdown(Socket::SHUT_WR)
-      assert_equal 'gpg request', Timeout.timeout(5) { client.read }
+      assert_equal 'gpg request', Timeout.timeout(5) {client.read}
     end
     assert_children_exit(1)
-    assert_includes File.read(@env['TEST_CHILD_ARGS']), '-a ' + @env['TEST_ASSUAN_PATH'] + '/agent-extra-socket'
+    assert_includes File.read(@env['TEST_CHILD_ARGS']), '-a -ei -ep ' + @env['TEST_ASSUAN_PATH'] + '/agent-extra-socket'
   end
 
   def test_systemd_activated_listener_forwards_gpg_with_npiperelay
@@ -184,15 +184,15 @@ class NpiperelayIntegrationTest < Minitest::Test
     UNIXSocket.open(path) do |client|
       client.write('activated gpg')
       client.shutdown(Socket::SHUT_WR)
-      assert_equal 'activated gpg', Timeout.timeout(5) { client.read }
+      assert_equal 'activated gpg', Timeout.timeout(5) {client.read}
     end
     assert_children_exit(1)
-    assert_includes File.read(@env['TEST_CHILD_ARGS']), '-a ' + @env['TEST_ASSUAN_PATH'] + '/agent-browser-socket'
+    assert_includes File.read(@env['TEST_CHILD_ARGS']), '-a -ei -ep ' + @env['TEST_ASSUAN_PATH'] + '/agent-browser-socket'
   end
 
   def test_missing_npiperelay_in_gpg_mode_reports_error
     File.unlink(File.join(@bin, 'npiperelay'))
-    output = IO.popen(@env, ['/usr/bin/ruby', WSL, '--mode', 'npiperelay', '--noncefile', File.join(@dir, 'nonce')], err: [:child, :out], &:read)
+    output = IO.popen(@env, ['/usr/bin/ruby', WSL, '--mode', 'npiperelay', '--noncefile', File.join(@dir, 'nonce')], err: %i[child out], &:read)
     refute $?.success?
     assert_includes output, 'cannot find npiperelay in PATH'
   end
@@ -210,17 +210,15 @@ class NpiperelayIntegrationTest < Minitest::Test
     (0..2).each do |offset|
       Timeout.timeout(5) do
         loop do
-          begin
-            socket = TCPSocket.new('127.0.0.1', first_port + offset)
-            socket.close
-            break
-          rescue Errno::ECONNREFUSED
-            sleep 0.02
-          end
+          socket = TCPSocket.new('127.0.0.1', first_port + offset)
+          socket.close
+          break
+        rescue Errno::ECONNREFUSED
+          sleep 0.02
         end
       end
     end
-    assert_raises(Errno::ECONNREFUSED) { TCPSocket.new('127.0.0.1', first_port + 3) }
+    assert_raises(Errno::ECONNREFUSED) {TCPSocket.new('127.0.0.1', first_port + 3)}
   rescue Timeout::Error
     warn File.read(File.join(@dir, 'win-relay.log')) if File.exist?(File.join(@dir, 'win-relay.log'))
     raise
@@ -228,7 +226,7 @@ class NpiperelayIntegrationTest < Minitest::Test
 
   def test_missing_npiperelay_reports_error
     File.unlink(File.join(@bin, 'npiperelay'))
-    output = IO.popen(@env, ['/usr/bin/ruby', WSL, '--enable-ssh-support', '--noncefile', File.join(@dir, 'nonce')], err: [:child, :out], &:read)
+    output = IO.popen(@env, ['/usr/bin/ruby', WSL, '--enable-ssh-support', '--noncefile', File.join(@dir, 'nonce')], err: %i[child out], &:read)
     refute $?.success?
     assert_includes output, 'cannot find npiperelay in PATH'
   end
@@ -251,7 +249,7 @@ class NpiperelayIntegrationTest < Minitest::Test
       env['LISTEN_FDNAMES'] = listen_name
       env['LISTEN_FDS'] = '1'
       args << '--systemd'
-      @relay_pid = Process.spawn(env, *args, 3 => @listen_socket, out: File::NULL, err: File.join(@dir, 'relay.log'))
+      @relay_pid = Process.spawn(env, *args, 3 => @listen_socket, :out => File::NULL, :err => File.join(@dir, 'relay.log'))
     else
       @relay_pid = Process.spawn(env, *args, out: File::NULL, err: File.join(@dir, 'relay.log'))
     end
@@ -273,7 +271,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     responder = Thread.new do
       peer = server.accept
       assert_equal nonce, peer.read(16)
-      assert_equal Digest::SHA256.hexdigest(request), Digest::SHA256.hexdigest(Timeout.timeout(5) { peer.read })
+      assert_equal Digest::SHA256.hexdigest(request), Digest::SHA256.hexdigest(Timeout.timeout(5) {peer.read})
       peer.write(response)
       peer.shutdown(Socket::SHUT_WR)
       peer.close
@@ -281,9 +279,9 @@ class NpiperelayIntegrationTest < Minitest::Test
     UNIXSocket.open(File.join(@dir, 'agent-socket')) do |client|
       client.write(request)
       client.shutdown(Socket::SHUT_WR)
-      assert_equal Digest::SHA256.hexdigest(response), Digest::SHA256.hexdigest(Timeout.timeout(5) { client.read })
+      assert_equal Digest::SHA256.hexdigest(response), Digest::SHA256.hexdigest(Timeout.timeout(5) {client.read})
     end
-    Timeout.timeout(5) { responder.value }
+    Timeout.timeout(5) {responder.value}
   end
 
   def disconnect_gpg_client(server, nonce)
@@ -292,14 +290,14 @@ class NpiperelayIntegrationTest < Minitest::Test
       assert_equal nonce, peer.read(16)
       assert_equal 'ping', peer.read(4)
       peer.write('ready')
-      assert_equal '', Timeout.timeout(5) { peer.read }
+      assert_equal '', Timeout.timeout(5) {peer.read}
       peer.close
     end
     client = UNIXSocket.new(File.join(@dir, 'agent-socket'))
     client.write('ping')
-    assert_equal 'ready', Timeout.timeout(5) { client.read(5) }
+    assert_equal 'ready', Timeout.timeout(5) {client.read(5)}
     client.close
-    Timeout.timeout(5) { responder.value }
+    Timeout.timeout(5) {responder.value}
   ensure
     client&.close unless client&.closed?
   end
@@ -317,7 +315,8 @@ class NpiperelayIntegrationTest < Minitest::Test
     Timeout.timeout(5) do
       loop do
         pids = File.exist?(@env['TEST_CHILD_PIDS']) ? File.readlines(@env['TEST_CHILD_PIDS']).map(&:to_i) : []
-        break if pids.length == count && pids.all? { |pid| !File.exist?("/proc/#{pid}") }
+        break if pids.length == count && pids.all? {|pid| !File.exist?("/proc/#{pid}")}
+
         sleep 0.02
       end
     end

@@ -120,7 +120,7 @@ func TestSSHForwarding(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
 	os.Mkdir(bin, 0755)
-	os.WriteFile(filepath.Join(bin, "npiperelay"), []byte("#!/bin/sh\n[ \"$*\" = '-ep -ei -p -s //./pipe/openssh-ssh-agent' ] || exit 2\nexec /bin/cat\n"), 0755)
+	os.WriteFile(filepath.Join(bin, "npiperelay"), []byte("#!/bin/sh\n[ \"$*\" = '-p -l -s -ei //./pipe/openssh-ssh-agent' ] || exit 2\nexec /bin/cat\n"), 0755)
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
 	client, err := net.Dial("unix", path)
@@ -150,7 +150,7 @@ func TestNpiperelayGPGForwardingAndPathCache(t *testing.T) {
 			args := filepath.Join(dir, "npiperelay-args")
 			pids := filepath.Join(dir, "npiperelay-pids")
 			gpgconf := "#!/bin/sh\nprintf '%s\\n' \"$2\" >> \"$TEST_GPGCONF_CALLS\"\nprintf '%s\\n' \"$TEST_WINDOWS_PATH\"\n"
-			npipe := "#!/bin/sh\nfor arg do printf '%s|' \"$arg\"; done >> \"$TEST_NPIPE_ARGS\"\nprintf '\\n' >> \"$TEST_NPIPE_ARGS\"\nprintf '%s\\n' \"$$\" >> \"$TEST_NPIPE_PIDS\"\nexec /bin/cat\n"
+			npipe := "#!/bin/sh\nargs=''\nfor arg do args=\"${args}${arg}|\"; done\nprintf '%s\\n' \"$args\" >> \"$TEST_NPIPE_ARGS\"\nprintf '%s\\n' \"$$\" >> \"$TEST_NPIPE_PIDS\"\nexec /bin/cat\n"
 			if err := os.WriteFile(filepath.Join(bin, "gpgconf.exe"), []byte(gpgconf), 0755); err != nil {
 				t.Fatal(err)
 			}
@@ -202,7 +202,7 @@ func TestNpiperelayGPGForwardingAndPathCache(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "-ep|-ei|-a|" + windowsPath + "|\n"
+			want := "-a|-ei|-ep|" + windowsPath + "|\n"
 			if string(argData) != want+want {
 				t.Fatalf("npiperelay arguments %q", argData)
 			}
@@ -219,8 +219,16 @@ func TestNpiperelayGPGForwardingAndPathCache(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-					t.Fatalf("child %d still alive: %v", pid, err)
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					err := syscall.Kill(pid, 0)
+					if errors.Is(err, syscall.ESRCH) {
+						break
+					}
+					if err != nil || time.Now().After(deadline) {
+						t.Fatalf("child %d still alive: %v", pid, err)
+					}
+					time.Sleep(10 * time.Millisecond)
 				}
 			}
 		})
@@ -293,7 +301,7 @@ func TestSystemdActivatedNpiperelayGPG(t *testing.T) {
 		t.Fatalf("response %q: %v", response, err)
 	}
 	data, err := os.ReadFile(args)
-	if err != nil || string(data) != "-ep|-ei|-a|"+windowsPath+"|\n" {
+	if err != nil || string(data) != "-a|-ei|-ep|"+windowsPath+"|\n" {
 		t.Fatalf("npiperelay arguments %q: %v", data, err)
 	}
 }
