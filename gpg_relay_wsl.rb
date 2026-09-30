@@ -112,11 +112,11 @@ class WslRelay < Relay
 
   def handle_client(client, remote_address, config, noncefile, assuan_socket_path, socket_name)
     if config[:type] == :ssh
-      relay_npiperelay(client, '-s', '//./pipe/openssh-ssh-agent', 'SSH pipe')
+      relay_npiperelay(client, ['-p', '-s'], '//./pipe/openssh-ssh-agent', 'SSH pipe')
       return
     end
     if config[:type] == :npiperelay
-      relay_npiperelay(client, '-a', windows_gpg_socket_path(socket_name), 'GPG socket')
+      relay_npiperelay(client, ['-a'], windows_gpg_socket_path(socket_name), 'GPG socket')
       return
     end
 
@@ -133,11 +133,11 @@ class WslRelay < Relay
     end
   end
 
-  def relay_npiperelay(client, target_flag, target_path, target_name)
+  def relay_npiperelay(client, target_flags, target_path, target_name)
     Thread.new do
       input = output = process = writer = nil
       begin
-        input, output, process = Open3.popen2('npiperelay', '-ei', target_flag, target_path)
+        input, output, process = Open3.popen2('npiperelay', '-ep', '-ei', *target_flags, target_path)
         writer = Thread.new do
           copied = IO.copy_stream(client, input)
           @logger.debug {"#{target_name} client input ended after #{copied} bytes"}
