@@ -320,7 +320,7 @@ func TestSystemdActivatedNpiperelayGPG(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
 	client, err := net.Dial("unix", listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -443,7 +443,7 @@ func TestPassedSystemdListener(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
 	client, err := net.Dial("unix", listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)

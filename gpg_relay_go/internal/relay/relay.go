@@ -92,18 +92,18 @@ func Copy(a, b net.Conn, log *slog.Logger) {
 			log.Debug("relay copy ended", "error", err)
 		}
 		if cw, ok := dst.(closeWriter); ok {
-			_ = cw.CloseWrite()
+			cw.CloseWrite()
 		} else {
-			_ = dst.SetWriteDeadline(time.Now())
+			dst.SetWriteDeadline(time.Now())
 		}
 		if err != nil {
-			_ = src.Close()
-			_ = dst.Close()
+			src.Close()
+			dst.Close()
 		}
 	}
 	go transfer(a, b)
 	go transfer(b, a)
 	wg.Wait()
-	_ = a.Close()
-	_ = b.Close()
+	a.Close()
+	b.Close()
 }

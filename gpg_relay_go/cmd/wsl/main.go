@@ -107,7 +107,7 @@ func run() error {
 	var listeners []net.Listener
 	defer func() {
 		for _, l := range listeners {
-			_ = l.Close()
+			l.Close()
 		}
 	}()
 	var names []socket
@@ -185,7 +185,7 @@ func activatedListener(names []string, name string) (net.Listener, error) {
 			return nil, fmt.Errorf("invalid fd for %s", name)
 		}
 		listener, err := net.FileListener(file)
-		_ = file.Close()
+		file.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -320,15 +320,15 @@ func relayNpiperelay(client net.Conn, targetFlags []string, targetPath string, l
 		return
 	}
 	done := make(chan struct{})
-	go func() { _, _ = io.Copy(stdin, client); _ = stdin.Close(); close(done) }()
+	go func() { io.Copy(stdin, client); stdin.Close(); close(done) }()
 	_, err = io.Copy(client, stdout)
 	if err != nil {
 		log.Debug("npiperelay output closed", "error", err)
 	}
 	if cw, ok := client.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
+		cw.CloseWrite()
 	}
-	_ = client.SetReadDeadline(time.Now())
+	client.SetReadDeadline(time.Now())
 	<-done
 	if err := cmd.Wait(); err != nil {
 		log.Debug("npiperelay exited", "error", err)

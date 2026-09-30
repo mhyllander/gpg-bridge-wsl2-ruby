@@ -80,7 +80,7 @@ func run() error {
 	var listeners []net.Listener
 	defer func() {
 		for _, l := range listeners {
-			_ = l.Close()
+			l.Close()
 		}
 	}()
 	for i, name := range names {
@@ -107,13 +107,13 @@ func serve(ctx context.Context, listener net.Listener, name string, nonce []byte
 		}
 		go func() {
 			defer client.Close()
-			_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
+			client.SetReadDeadline(time.Now().Add(10 * time.Second))
 			got := make([]byte, relay.NonceSize)
 			if _, err := io.ReadFull(client, got); err != nil {
 				log.Error("nonce read failed", "socket", name, "error", err)
 				return
 			}
-			_ = client.SetReadDeadline(time.Time{})
+			client.SetReadDeadline(time.Time{})
 			if subtle.ConstantTimeCompare(got, nonce) != 1 {
 				log.Error("incorrect nonce", "socket", name)
 				return

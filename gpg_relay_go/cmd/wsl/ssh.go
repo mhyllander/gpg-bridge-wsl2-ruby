@@ -35,12 +35,12 @@ func startSSHProcess(ctx context.Context) (*sshProcess, error) {
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		_ = stdin.Close()
+		stdin.Close()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
+		stdin.Close()
+		stdout.Close()
 		return nil, err
 	}
 	p := &sshProcess{cmd: cmd, stdin: stdin, stdout: stdout, exited: make(chan error, 1)}
@@ -49,10 +49,10 @@ func startSSHProcess(ctx context.Context) (*sshProcess, error) {
 }
 
 func (p *sshProcess) stop() {
-	_ = p.stdin.Close()
-	_ = p.cmd.Process.Kill()
+	p.stdin.Close()
+	p.cmd.Process.Kill()
 	<-p.exited
-	_ = p.stdout.Close()
+	p.stdout.Close()
 }
 
 func readSSHPacket(r io.Reader) ([]byte, error) {
@@ -115,11 +115,6 @@ func serveSSHRequests(ctx context.Context, requests <-chan sshRequest, log *slog
 func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest, log *slog.Logger, idleTimeout time.Duration) {
 	// The first accepted client starts this worker and its child process.
 	process, err := startSSHProcess(ctx)
-	idleTimer := time.NewTimer(idleTimeout)
-	if process == nil {
-		idleTimer.Stop()
-	}
-	defer idleTimer.Stop()
 	if err != nil {
 		log.Error("start SSH npiperelay", "error", err)
 	}
@@ -128,6 +123,20 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 			process.stop()
 		}
 	}()
+
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+	if process == nil {
+		idleTimer.Stop()
+	}
+
+	processCleanupAfterExit := func() {
+		idleTimer.Stop()
+		process.stdin.Close()
+		process.stdout.Close()
+		process = nil
+	}
+
 	for {
 		var req sshRequest
 		if process == nil {
@@ -135,12 +144,6 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 			case <-ctx.Done():
 				return
 			case req = <-requests:
-			}
-			process, err = startSSHProcess(ctx)
-			if err != nil {
-				log.Error("start SSH npiperelay", "error", err)
-				req.done <- err
-				continue
 			}
 		} else {
 			select {
@@ -151,28 +154,29 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 				process = nil
 				continue
 			case <-process.exited:
-				idleTimer.Stop()
-				_ = process.stdin.Close()
-				_ = process.stdout.Close()
-				process = nil
+				processCleanupAfterExit()
 				continue
 			case req = <-requests:
+				idleTimer.Stop()
 			}
-			idleTimer.Stop()
 			// Reap an idle child that exited just before this request arrived.
 			select {
 			case <-process.exited:
-				_ = process.stdin.Close()
-				_ = process.stdout.Close()
-				process, err = startSSHProcess(ctx)
-				if err != nil {
-					req.done <- err
-					process = nil
-					continue
-				}
+				processCleanupAfterExit()
 			default:
 			}
 		}
+
+		// A client request was received. Start SSH npiperelay if needed.
+		if process == nil {
+			process, err = startSSHProcess(ctx)
+			if err != nil {
+				log.Error("start SSH npiperelay", "error", err)
+				req.done <- err
+				continue
+			}
+		}
+
 		err = writeAll(process.stdin, req.packet)
 		var response []byte
 		if err == nil {
@@ -190,6 +194,8 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 				process = nil
 			}
 		}
+
+		// reset the idle timer after serving the requestg
 		if process != nil {
 			idleTimer.Reset(idleTimeout)
 		}
