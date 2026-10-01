@@ -139,7 +139,19 @@ func TestSSHForwarding(t *testing.T) {
 		t.Fatal(err)
 	}
 	launches := filepath.Join(dir, "launches")
-	fake := "#!/usr/bin/env python3\nimport os,sys,struct\nwith open(os.environ['TEST_LAUNCHES'],'a') as f: f.write(str(os.getpid())+'\\n')\nwhile True:\n h=sys.stdin.buffer.read(4)\n if len(h)<4: break\n n=struct.unpack('>I',h)[0]\n body=sys.stdin.buffer.read(n)\n if len(body)<n: break\n sys.stdout.buffer.write(h+body)\n sys.stdout.buffer.flush()\n"
+	fake := `#!/usr/bin/env python3
+import os,sys,struct
+assert sys.argv[1:] == ['-p', '-l', '-s', '-ep', '//./pipe/openssh-ssh-agent'], sys.argv[1:]
+with open(os.environ['TEST_LAUNCHES'],'a') as f: f.write(str(os.getpid())+'\n')
+while True:
+ h=sys.stdin.buffer.read(4)
+ if len(h)<4: break
+ n=struct.unpack('>I',h)[0]
+ body=sys.stdin.buffer.read(n)
+ if len(body)<n: break
+ sys.stdout.buffer.write(h+body)
+ sys.stdout.buffer.flush()
+`
 	if err := os.WriteFile(filepath.Join(bin, "npiperelay"), []byte(fake), 0755); err != nil {
 		t.Fatal(err)
 	}

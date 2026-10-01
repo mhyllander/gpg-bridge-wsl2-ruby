@@ -14,7 +14,7 @@ class SSHRelayTest < Minitest::Test
     @child = File.join(@dir, 'npiperelay')
     File.write(@child, <<~RUBY)
       #!/usr/bin/ruby
-      exit 2 unless ARGV == ['-p', '-l', '-s', '-ei', '-ep', '//./pipe/openssh-ssh-agent']
+      exit 2 unless ARGV == ['-p', '-l', '-s', '-ep', '//./pipe/openssh-ssh-agent']
       File.open('#{@pids}', 'a') { |f| f.puts Process.pid }
       loop do
         header = STDIN.read(4)

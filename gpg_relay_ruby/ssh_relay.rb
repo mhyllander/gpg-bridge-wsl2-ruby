@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'open3'
-require 'thread'
 
 # One SSH agent pipe is shared by all clients of the WSL SSH socket.
 class SSHRelay
@@ -29,8 +28,8 @@ class SSHRelay
         return
       end
       @clients << client
-      @worker ||= Thread.new { run }
-      @readers << Thread.new { read_client(client) }
+      @worker ||= Thread.new {run}
+      @readers << Thread.new {read_client(client)}
     end
   end
 
@@ -44,11 +43,15 @@ class SSHRelay
       readers = @readers.dup
       worker = @worker
       pid = @wait_thread&.pid
-      @queue.each { |request| request[:done] << false }
+      @queue.each {|request| request[:done] << false}
       @queue.clear
       @ready.broadcast
     end
-    clients.each { |client| client.close rescue nil }
+    clients.each do |client|
+      client.close
+    rescue StandardError
+      nil
+    end
     kill_process(pid) if pid
     worker&.join
     readers.each(&:join)
@@ -67,7 +70,7 @@ class SSHRelay
       @mutex.synchronize do
         return if @closed
 
-        @queue << {client: client, packet: packet, done: done}
+        @queue << { client: client, packet: packet, done: done }
         @ready.signal
       end
       break unless done.pop
@@ -86,9 +89,7 @@ class SSHRelay
 
   def read_exact(io, length)
     result = ''.b
-    while result.bytesize < length
-      result << io.readpartial(length - result.bytesize)
-    end
+    result << io.readpartial(length - result.bytesize) while result.bytesize < length
     result
   end
 
@@ -104,9 +105,9 @@ class SSHRelay
 
   def start_process
     @input, @output, @wait_thread = Open3.popen2(
-      @command, '-p', '-l', '-s', '-ei', '-ep', '//./pipe/openssh-ssh-agent'
+      @command, '-p', '-l', '-s', '-ep', '//./pipe/openssh-ssh-agent'
     )
-    @mutex.synchronize { @ready.broadcast }
+    @mutex.synchronize {@ready.broadcast}
     Process.clock_gettime(Process::CLOCK_MONOTONIC) + @idle_timeout
   rescue StandardError => e
     @logger.error "start SSH npiperelay failed: #{e.inspect}"
@@ -121,7 +122,9 @@ class SSHRelay
   end
 
   def stop_process
-    input, output, wait_thread = @input, @output, @wait_thread
+    input = @input
+    output = @output
+    wait_thread = @wait_thread
     @input = @output = @wait_thread = nil
     input&.close unless input&.closed?
     kill_process(wait_thread.pid) if wait_thread&.alive?
@@ -141,6 +144,7 @@ class SSHRelay
           @ready.wait(@mutex, remaining)
         end
         return if @closed
+
         request = @queue.shift unless @queue.empty?
       end
       if request.nil?

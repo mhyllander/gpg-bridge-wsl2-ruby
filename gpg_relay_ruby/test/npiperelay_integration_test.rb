@@ -31,7 +31,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     executable('ip', "#!/bin/sh\nprintf 'default via 127.0.0.1 dev eth0\\n'\n")
     executable('npiperelay', <<~RUBY)
       #!/usr/bin/ruby
-      valid_ssh = ARGV == ['-p', '-l', '-s', '-ei', '-ep', '//./pipe/openssh-ssh-agent']
+      valid_ssh = ARGV == ['-p', '-l', '-s', '-ep', '//./pipe/openssh-ssh-agent']
       gpg_sockets = %w[agent-socket agent-extra-socket agent-browser-socket]
       valid_gpg = ARGV.length == 4 && ARGV[0..2] == ['-a', '-ei', '-ep'] &&
                   ARGV[3].start_with?(ENV.fetch('TEST_ASSUAN_PATH') + '/') &&

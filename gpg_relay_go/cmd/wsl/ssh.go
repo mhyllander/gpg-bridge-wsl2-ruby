@@ -28,7 +28,7 @@ type sshProcess struct {
 }
 
 func startSSHProcess(ctx context.Context) (*sshProcess, error) {
-	cmd := exec.CommandContext(ctx, "npiperelay", "-p", "-l", "-s", "-ei", "-ep", "//./pipe/openssh-ssh-agent")
+	cmd := exec.CommandContext(ctx, "npiperelay", "-p", "-l", "-s", "-ep", "//./pipe/openssh-ssh-agent")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
