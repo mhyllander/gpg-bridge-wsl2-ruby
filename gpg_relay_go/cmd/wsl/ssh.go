@@ -116,7 +116,7 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 	// The first accepted client starts this worker and its child process.
 	process, err := startSSHProcess(ctx)
 	if err != nil {
-		log.Error("start SSH npiperelay", "error", err)
+		log.Error("SSH npiperelay start failed", "error", err)
 	}
 	defer func() {
 		if process != nil {
@@ -150,10 +150,12 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 			case <-ctx.Done():
 				return
 			case <-idleTimer.C:
+				log.Debug("SSH process idle timeout, stopping")
 				process.stop()
 				process = nil
 				continue
 			case <-process.exited:
+				log.Debug("SSH process exited, cleaning up")
 				processCleanupAfterExit()
 				continue
 			case req = <-requests:
@@ -162,6 +164,7 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 			// Reap an idle child that exited just before this request arrived.
 			select {
 			case <-process.exited:
+				log.Debug("SSH process exited before request, cleaning up")
 				processCleanupAfterExit()
 			default:
 			}
@@ -171,7 +174,7 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 		if process == nil {
 			process, err = startSSHProcess(ctx)
 			if err != nil {
-				log.Error("start SSH npiperelay", "error", err)
+				log.Error("SSH npiperelay start failed", "error", err)
 				req.done <- err
 				continue
 			}
@@ -190,12 +193,13 @@ func serveSSHRequestsWithTimeout(ctx context.Context, requests <-chan sshRequest
 			log.Debug("SSH npiperelay request failed", "error", err)
 			// A client write failure does not desynchronize the child.
 			if response == nil {
+				log.Debug("SSH process stopping after request failure")
 				process.stop()
 				process = nil
 			}
 		}
 
-		// reset the idle timer after serving the requestg
+		// reset the idle timer after serving the request
 		if process != nil {
 			idleTimer.Reset(idleTimeout)
 		}

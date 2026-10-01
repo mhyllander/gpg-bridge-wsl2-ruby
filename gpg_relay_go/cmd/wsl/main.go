@@ -139,7 +139,7 @@ func run() error {
 		}
 		listeners = append(listeners, listener)
 		go serve(ctx, listener, s, *mode, *remote, *port, *noncePath, log)
-		log.Info("listening", "socket", s.name, "address", listener.Addr())
+		log.Info("listening on socket", "socket_name", s.name, "address", listener.Addr())
 	}
 	<-ctx.Done()
 	return nil
@@ -250,13 +250,14 @@ func (p *socketPaths) wslPath(name string) (string, error) {
 }
 
 func serve(ctx context.Context, listener net.Listener, s socket, mode, remote string, firstPort int, noncePath string, log *slog.Logger) {
+	log = log.With("socket_name", s.name)
 	paths := &socketPaths{}
 	var sshRequests chan sshRequest
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() == nil {
-				log.Error("accept failed", "socket", s.name, "error", err)
+				log.Error("accept failed", "error", err)
 			}
 			return
 		}
@@ -272,10 +273,11 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 			if mode == "npiperelay" {
 				path, err := paths.windowsPath(s.name)
 				if err != nil {
-					log.Error("Windows socket path lookup failed", "socket", s.name, "error", err)
+					log.Error("Windows socket path lookup failed", "error", err)
 					client.Close()
 					return
 				}
+				log.Debug("relaying via npiperelay", "path", path)
 				relayNpiperelay(client, []string{"-a", "-ei", "-ep"}, path, log)
 				return
 			}
@@ -292,7 +294,7 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 				}
 			}
 			if dialErr != nil {
-				log.Error("upstream connection failed", "socket", s.name, "error", dialErr)
+				log.Error("upstream connection failed", "error", dialErr)
 				client.Close()
 				return
 			}
@@ -307,16 +309,16 @@ func relayNpiperelay(client net.Conn, targetFlags []string, targetPath string, l
 	cmd := exec.Command("npiperelay", args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		log.Error("npiperelay stdin", "error", err)
+		log.Error("npiperelay stdin pipe creation failed", "error", err)
 		return
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Error("npiperelay stdout", "error", err)
+		log.Error("npiperelay stdout pipe creation failed", "error", err)
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		log.Error("start npiperelay", "error", err)
+		log.Error("npiperelay start failed", "error", err)
 		return
 	}
 	done := make(chan struct{})

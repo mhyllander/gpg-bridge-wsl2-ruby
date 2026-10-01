@@ -90,18 +90,19 @@ func run() error {
 		}
 		listeners = append(listeners, listener)
 		go serve(ctx, listener, name, nonce, log)
-		log.Info("listening", "socket", name, "address", listener.Addr())
+		log.Info("listening on socket", "socket_name", name, "address", listener.Addr())
 	}
 	<-ctx.Done()
 	return nil
 }
 
 func serve(ctx context.Context, listener net.Listener, name string, nonce []byte, log *slog.Logger) {
+	log = log.With("socket_name", name)
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() == nil {
-				log.Error("accept failed", "socket", name, "error", err)
+				log.Error("accept failed", "error", err)
 			}
 			return
 		}
@@ -110,22 +111,22 @@ func serve(ctx context.Context, listener net.Listener, name string, nonce []byte
 			client.SetReadDeadline(time.Now().Add(10 * time.Second))
 			got := make([]byte, relay.NonceSize)
 			if _, err := io.ReadFull(client, got); err != nil {
-				log.Error("nonce read failed", "socket", name, "error", err)
+				log.Error("nonce read failed", "error", err)
 				return
 			}
 			client.SetReadDeadline(time.Time{})
 			if subtle.ConstantTimeCompare(got, nonce) != 1 {
-				log.Error("incorrect nonce", "socket", name)
+				log.Error("incorrect nonce")
 				return
 			}
 			path, err := relay.CommandOutput("gpgconf.exe", "--list-dirs", name)
 			if err != nil {
-				log.Error("gpgconf failed", "socket", name, "error", err)
+				log.Error("Windows socket path lookup failed", "error", err)
 				return
 			}
 			upstream, err := relay.DialAssuan(path)
 			if err != nil {
-				log.Error("Assuan connection failed", "socket", name, "error", err)
+				log.Error("Assuan connection failed", "error", err)
 				return
 			}
 			relay.Copy(client, upstream, log)
