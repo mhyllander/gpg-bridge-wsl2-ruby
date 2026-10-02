@@ -1,4 +1,4 @@
-# This is the release workflow that builds an asset and creates a release whenever a v* tag is created
+# Build Go executables and a Ruby package whenever a v* tag is created.
 
 name: Create Release
 
@@ -12,15 +12,27 @@ jobs:
   build:
     name: Create release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Build tar.gz
-        run: tar zcf gpgrelay.tar.gz relay.rb gpg_relay_wsl.rb gpg_relay_win.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: gpg_relay_go/go.mod
+          cache-dependency-path: gpg_relay_go/go.mod
 
-      - name: Build zip
-        run: zip gpgrelay.zip relay.rb gpg_relay_wsl.rb gpg_relay_win.rb Gemfile Gemfile.lock README.md ReleaseNotes.md systemd
+      - name: Build Go executables
+        run: make -C gpg_relay_go all
+
+      - name: Build Ruby tar.gz
+        run: |
+          tar zcf gpgrelay.tar.gz LICENSE \
+            -C gpg_relay_ruby \
+            relay.rb ssh_relay.rb gpg_relay_wsl.rb gpg_relay_win.rb \
+            Gemfile Gemfile.lock README.md systemd
 
       - name: Release
         id: create_release
@@ -31,8 +43,10 @@ jobs:
           body_path: ReleaseNotes.md
           draft: false
           prerelease: ${{ contains(github.ref, '-pre') }}
+          fail_on_unmatched_files: true
           files: |-
-            gpgbridge.tar.gz
-            gpgbridge.zip"
+            gpgrelay.tar.gz
+            gpg_relay_go/gpg_relay_wsl
+            gpg_relay_go/gpg_relay_win.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

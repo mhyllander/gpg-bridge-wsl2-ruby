@@ -1,18 +1,6 @@
 # Change log
 
-## Changes in v1.5.1
+## 1.0.0 (Initial release)
 
-* bugfix
-
-## Changes in v1.5
-
-* Verified with ruby 3.4, and updated gems.
-* Handle msg==nil errors
-
-## Changes in v1.4
-
-* Verified with ruby 3.2 & 3.3, and updated gems.
-
-## Changes in v1.3
-
-* Updates to the helper functions to support zsh (contributed by @tetov).
+A big modernization of [mhyllander/gpg-bridge-wsl-ruby](https://github.com/mhyllander/gpg-bridge-wsl-ruby) that provides multiple modes
+for relaying GPG and SSH requests to Gpg4win. It also provides a Go implementation.
