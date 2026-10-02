@@ -203,10 +203,10 @@ Usage: gpg_relay_win.rb [options]
 
 ### Mode Selection
 
-- **`nat`**: Use this mode when WSL2 is configured with NAT networking.
-  Requires a Windows Firewall rule (see [Firewall and Security](#firewall-and-security)).
 - **`mirrored`** (default): Use this mode when running in WSL1 or when WSL2 is configured
   with mirrored networking. No firewall changes or Win Relay are needed.
+- **`nat`**: Use this mode when WSL2 is configured with NAT networking.
+  Requires a Windows Firewall rule (see [Firewall and Security](#firewall-and-security)).
 - **`npiperelay`**: Use this mode with any WSL networking configuration to
   reach GPG through Windows executable interop. No Win Relay is needed.
 
