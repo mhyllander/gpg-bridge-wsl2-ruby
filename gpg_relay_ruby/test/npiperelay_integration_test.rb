@@ -109,24 +109,23 @@ class NpiperelayIntegrationTest < Minitest::Test
     assert_children_exit(1)
   end
 
-  def test_gpg_uses_direct_assuan_in_wsl1_and_mirrored_modes
-    %w[wsl1 wsl2_mirrored].each do |mode|
-      server = TCPServer.new('127.0.0.1', 0)
-      nonce = 'a' * 16
-      File.binwrite(@env['TEST_ASSUAN_PATH'], "#{server.addr[1]}\n#{nonce}")
-      start_relay(false, mode)
-      wait_for_socket(File.join(@dir, 'agent-socket'))
-      exchange_gpg(server, nonce)
-      stop_relay
-      server.close
-    end
+  def test_gpg_uses_direct_assuan_in_mirrored_mode
+    server = TCPServer.new('127.0.0.1', 0)
+    nonce = 'a' * 16
+    File.binwrite(@env['TEST_ASSUAN_PATH'], "#{server.addr[1]}\n#{nonce}")
+    start_relay(false, 'mirrored')
+    wait_for_socket(File.join(@dir, 'agent-socket'))
+    exchange_gpg(server, nonce)
+    stop_relay
+  ensure
+    server&.close
   end
 
   def test_gpg_uses_windows_relay_in_nat_mode
     server = TCPServer.new('127.0.0.1', 0)
     nonce = 'b' * 16
     File.binwrite(File.join(@dir, 'nonce'), nonce)
-    start_relay(false, 'wsl2_nat', server.addr[1])
+    start_relay(false, 'nat', server.addr[1])
     wait_for_socket(File.join(@dir, 'agent-socket'))
     exchange_gpg(server, nonce)
   ensure
@@ -137,7 +136,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     server = TCPServer.new('127.0.0.1', 0)
     nonce = 'c' * 16
     File.binwrite(@env['TEST_ASSUAN_PATH'], "#{server.addr[1]}\n#{nonce}")
-    start_relay(false, 'wsl2_mirrored')
+    start_relay(false, 'mirrored')
     wait_for_socket(File.join(@dir, 'agent-socket'))
     disconnect_gpg_client(server, nonce)
   ensure
@@ -148,7 +147,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     server = TCPServer.new('127.0.0.1', 0)
     nonce = 'd' * 16
     File.binwrite(File.join(@dir, 'nonce'), nonce)
-    start_relay(false, 'wsl2_nat', server.addr[1])
+    start_relay(false, 'nat', server.addr[1])
     wait_for_socket(File.join(@dir, 'agent-socket'))
     disconnect_gpg_client(server, nonce)
   ensure
@@ -262,7 +261,7 @@ class NpiperelayIntegrationTest < Minitest::Test
     File.chmod(0o755, path)
   end
 
-  def start_relay(systemd = false, mode = 'wsl2_mirrored', port = nil, ssh = true, listen_name = 'agent-ssh-socket')
+  def start_relay(systemd = false, mode = 'mirrored', port = nil, ssh = true, listen_name = 'agent-ssh-socket')
     env = @env.dup
     env['TEST_GPG_SOCKET_PATHS'] = '1' if mode == 'npiperelay'
     args = ['/usr/bin/ruby', WSL, '--noncefile', File.join(@dir, 'nonce'), '--mode', mode]

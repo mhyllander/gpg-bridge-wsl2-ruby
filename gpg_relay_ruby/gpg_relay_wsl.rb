@@ -256,7 +256,7 @@ LEVELS = %w[DEBUG INFO WARN ERROR FATAL UNKNOWN].freeze
 # SSH uses npiperelay to reach Gpg4win's named pipe in every networking mode.
 
 options = {
-  mode:               'wsl2_mirrored',
+  mode:               'mirrored',
   remote_address:     '127.0.0.1',
   enable_ssh_support: false,
   systemd:            false,
@@ -270,9 +270,9 @@ options = {
 OptionParser.new do |opts|
   opts.banner = 'Usage: gpg_relay_wsl.rb [options]'
 
-  opts.on('-m', '--mode MODE', String, "The GPG access mode (wsl1, wsl2_nat, wsl2_mirrored, npiperelay) [#{options[:mode]}]") do |v|
+  opts.on('-m', '--mode MODE', String, "The GPG access mode (nat, mirrored, npiperelay) [#{options[:mode]}]") do |v|
     options[:mode] = v
-    unless %w[wsl1 wsl2_nat wsl2_mirrored npiperelay].include?(v)
+    unless %w[nat mirrored npiperelay].include?(v)
       warn "Unknown mode: #{v}"
       exit 1
     end
@@ -329,9 +329,9 @@ if (options[:enable_ssh_support] || options[:mode] == 'npiperelay') && !executab
 end
 
 case options[:mode]
-when 'wsl2_nat'
+when 'nat'
   options[:remote_address] = Regexp.last_match(1) if %x[ip route].split("\n").grep(/^default via /).first =~ /^default via ([0-9.]+)/
-when 'wsl1', 'wsl2_mirrored'
+when 'mirrored'
   options[:remote_address] = '127.0.0.1'
 end
 
@@ -370,7 +370,7 @@ logger.debug {"using noncefile #{options[:noncefile]}"}
 # Create the map of gpg sockets and corresponding bridge ports
 first_port = options[:port]
 access_mode = case options[:mode]
-              when 'wsl2_nat' then :relay
+              when 'nat' then :relay
               when 'npiperelay' then :npiperelay
               else :assuan
               end

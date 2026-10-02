@@ -10,6 +10,76 @@ This tool is inspired by
 [wsl-gpg-bridge](https://github.com/Riebart/wsl-gpg-bridge), which works
 with WSL1 together with Gpg4win and a Yubikey.
 
+### GPG Access Modes
+
+The WSL Relay supports three modes, selected with `--mode`:
+
+**Direct access for WSL1 or WSL2 with mirrored networking** (`mirrored`):
+
+```mermaid
+flowchart LR
+    gpg["gpg"] -->|Unix socket| relay["WSL Relay"]
+    relay -->|Assuan/TCP socket| agent["gpg-agent.exe"]
+    ssh["ssh"] -->|Unix socket| relay
+    relay --> ssh_pipe["npiperelay (shared process)"]
+    ssh_pipe -->|named pipe| agent
+```
+
+WSL1 and WSL2 with mirrored networking can connect to gpg-agent.exe on 127.0.0.1 directly,
+so no firewall changes or Win Relay are needed.
+
+**WSL2 with NAT networking** (`nat`):
+
+```mermaid
+flowchart LR
+    gpg["gpg"] -->|Unix socket| relay["WSL Relay"]
+    relay --> firewall["Windows Firewall"]
+    firewall -->|TCP socket| win["Win Relay"]
+    win -->|Assuan/TCP socket| agent["gpg-agent.exe"]
+    ssh["ssh"] -->|Unix socket| relay
+    relay --> ssh_pipe["npiperelay (shared process)"]
+    ssh_pipe -->|named pipe| agent
+```
+
+WSL2 in NAT mode has a different IP address than the Windows host, so
+network traffic to Windows is external (public). The Win Relay must listen
+on `0.0.0.0` and the three GPG ports must be proxied. A firewall rule
+is required for the three GPG ports (see [Firewall and Security](#firewall-and-security)).
+
+**npiperelay** (`npiperelay`):
+
+```mermaid
+flowchart LR
+    gpg["gpg"] -->|Unix socket| relay["WSL Relay"]
+    relay --> gpg_pipe["npiperelay (per GPG connection)"]
+    gpg_pipe -->|Assuan/TCP socket| agent["gpg-agent.exe"]
+    ssh["ssh"] -->|Unix socket| relay
+    relay --> ssh_pipe["npiperelay (shared process)"]
+    ssh_pipe -->|named pipe| agent
+```
+
+This mode works in any WSL variant when Windows
+executable interop is enabled. It does not need the Win Relay or a Windows
+Firewall rule. It starts one `npiperelay` process per GPG client connection.
+
+### Access Modes
+
+- **Direct GPG access** (WSL1, WSL2 mirrored): The WSL Relay connects to
+  Gpg4win's Assuan sockets.
+- **GPG access using TCP relay** (WSL2 NAT): The WSL Relay connects to the Win Relay
+  over TCP. The Win Relay connects to Gpg4win's Assuan sockets.
+- **GPG access through npiperelay** (`npiperelay`): The WSL Relay starts
+  `npiperelay` on the Windows Assuan socket path for each GPG connection.
+- **SSH access** (all modes): The WSL Relay multiplexes all SSH client requests through one `npiperelay`
+  process for Gpg4win's `//./pipe/openssh-ssh-agent`.
+
+### Authentication
+
+To prevent unauthorized access to the Win Relay in WSL2 NAT mode, a nonce-based authentication scheme is used.
+The Win Relay generates a random 16-byte nonce and stores it in a file.
+The WSL Relay reads the nonce from the file and sends it when connecting.
+The Win Relay rejects connections with an incorrect nonce.
+
 ## Architecture
 
 This solution consists of two relay components:
@@ -36,77 +106,11 @@ starts a new process. SSH traffic never passes through the Win Relay.
  Gpg4win's gpg-agent must be configured with `enable-ssh-support` and
  `enable-win32-openssh-support`.
 
-### GPG Access Modes
-
-The WSL Relay supports four modes, selected with `--mode`:
-
-**WSL1** (`wsl1`):
-
-```
-gpg -> (Unix socket) -> WSL Relay -> (Assuan/TCP socket) -> gpg-agent.exe
-ssh -> (Unix socket) -> WSL Relay -> npiperelay -> (named pipe) -> gpg-agent.exe
-```
-
-WSL1 can connect directly to 127.0.0.1 in Windows, so no firewall changes
-are needed. The Win Relay is not required in this mode.
-
-**WSL2 with NAT networking** (`wsl2_nat`):
-
-```
-gpg -> (Unix socket) -> WSL Relay -> [Windows Firewall] -> (TCP socket) -> Win Relay -> (Assuan/TCP socket) -> gpg-agent.exe
-ssh -> (Unix socket) -> WSL Relay -> npiperelay -> (named pipe) -> gpg-agent.exe
-```
-
-WSL2 in NAT mode has a different IP address than the Windows host, so
-network traffic to Windows is external (public). The Win Relay must listen
-on `0.0.0.0` and the three GPG ports must be proxied. A firewall rule
-is required for the three GPG ports (see [Firewall and Security](#firewall-and-security)).
-
-**WSL2 with Mirrored networking** (`wsl2_mirrored`):
-
-```
-gpg -> (Unix socket) -> WSL Relay -> (Assuan/TCP socket) -> gpg-agent.exe
-ssh -> (Unix socket) -> WSL Relay -> npiperelay -> (named pipe) -> gpg-agent.exe
-```
-
-WSL2 in mirrored mode can connect to gpg-agent.exe on 127.0.0.1 directly,
-so no firewall changes or Win Relay are needed.
-
-**npiperelay** (`npiperelay`):
-
-```
-gpg -> (Unix socket) -> WSL Relay -> npiperelay -> (Windows Assuan socket) -> gpg-agent.exe
-ssh -> (Unix socket) -> WSL Relay -> npiperelay -> (named pipe) -> gpg-agent.exe
-```
-
-This mode works in any WSL variant when Windows
-executable interop is enabled. It does not need the Win Relay or a Windows
-Firewall rule. It starts one `npiperelay` process per GPG client connection.
-
-### Access Modes
-
-- **Direct GPG access** (WSL1, WSL2 mirrored): The WSL Relay connects to
-  Gpg4win's Assuan sockets.
-- **GPG relay access** (WSL2 NAT): The WSL Relay connects to the Win Relay
-  over TCP. The Win Relay connects to Gpg4win's Assuan sockets.
-- **GPG access through npiperelay** (`npiperelay`): The WSL Relay starts
-  `npiperelay` on the Windows Assuan
-  socket path for each GPG connection.
-- **SSH access** (all modes): The WSL Relay shares one `npiperelay` process
-  for Gpg4win's `//./pipe/openssh-ssh-agent` across SSH clients.
-
-### Authentication
-
-To prevent unauthorized access to the Win Relay in WSL2 NAT mode, a nonce-based authentication scheme is used.
-The Win Relay generates a random 16-byte nonce and stores it in a file.
-The WSL Relay reads the nonce from the file and sends it when connecting.
-The Win Relay rejects connections with an incorrect nonce.
-
 ## Firewall and Security
 
 ### Firewall Rules
 
-**WSL1** and **WSL2 Mirrored** modes connect to 127.0.0.1 in Windows.
+The **mirrored** mode connects to 127.0.0.1 in Windows from WSL1 or WSL2 with mirrored networking.
 The **npiperelay** mode runs a Windows process to connect to the local
 Assuan socket. None of these modes requires a firewall change.
 
@@ -168,7 +172,7 @@ which is `/mnt/c/Program1/gpgrelay` in WSL.
 ```bash
 $ ruby /mnt/c/Program1/gpgrelay/gpg_relay_wsl.rb --help
 Usage: gpg_relay_wsl.rb [options]
-    -m, --mode MODE                  The GPG access mode (wsl1, wsl2_nat, wsl2_mirrored, npiperelay) [wsl2_mirrored]
+    -m, --mode MODE                  The GPG access mode (nat, mirrored, npiperelay) [mirrored]
     -s, --[no-]enable-ssh-support    Relay SSH through the Gpg4win named pipe using npiperelay
     -r, --remote-address IPADDR      The remote address of the Windows relay component [127.0.0.1]
     -p, --port PORT                  The first of three ports used for GPG sockets
@@ -182,7 +186,7 @@ Usage: gpg_relay_wsl.rb [options]
 
 ### Win Relay
 
-In `wsl2_nat` mode, start the Win Relay independently in Windows (e.g., via
+In `nat` mode, start the Win Relay independently in Windows (e.g., via
 Task Scheduler, a batch file, or PowerShell). It handles only GPG traffic.
 
 ```bash
@@ -199,16 +203,15 @@ Usage: gpg_relay_win.rb [options]
 
 ### Mode Selection
 
-- **`wsl1`**: Use this mode when running in WSL1. No firewall changes needed.
-- **`wsl2_nat`**: Use this mode when WSL2 is configured with NAT networking.
+- **`nat`**: Use this mode when WSL2 is configured with NAT networking.
   Requires a Windows Firewall rule (see [Firewall and Security](#firewall-and-security)).
-- **`wsl2_mirrored`** (default): Use this mode when WSL2 is configured with
-  mirrored networking. No firewall changes or Win Relay are needed.
+- **`mirrored`** (default): Use this mode when running in WSL1 or when WSL2 is configured
+  with mirrored networking. No firewall changes or Win Relay are needed.
 - **`npiperelay`**: Use this mode with any WSL networking configuration to
   reach GPG through Windows executable interop. No Win Relay is needed.
 
-When the mode is set to `wsl2_nat`, the remote address is automatically
-detected from the default gateway. In `wsl1` and `wsl2_mirrored` modes, the remote address is set to
+When the mode is set to `nat`, the remote address is automatically
+detected from the default gateway. In `mirrored` mode, the remote address is set to
 `127.0.0.1`.
 The `npiperelay` mode does not use the remote address.
 
@@ -265,7 +268,7 @@ For example, to change the access mode or enable SSH support:
 
 ```ini
 [Service]
-ExecStart=/usr/bin/ruby /mnt/c/Program1/gpgrelay/gpg_relay_wsl.rb --systemd --enable-ssh-support --mode=wsl2_mirrored
+ExecStart=/usr/bin/ruby /mnt/c/Program1/gpgrelay/gpg_relay_wsl.rb --systemd --enable-ssh-support --mode=mirrored
 ```
 
 ## A note about gpg-agent.exe and its support for SSH
@@ -281,7 +284,7 @@ implementation appears to be limited: gpg-agent.exe cannot handle multiple
 simultaneous requests. If multiple npiperelay processes are started at the
 same time, most of them will fail to connect with "pipe busy" errors, and
 gpg-agent.exe does not appear to recover. The solution to this is to keep
-one single npiperelay process running that can process SSH requests from
+one single npiperelay process running that can multiplex SSH requests from
 multiple clients and return the responses.
 
 ## Tips when using Remote Desktop

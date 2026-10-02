@@ -57,7 +57,7 @@ func exchange(t *testing.T, path string) {
 }
 
 func TestDirectAndNATForwarding(t *testing.T) {
-	for _, mode := range []string{"wsl1", "wsl2_mirrored", "wsl2_nat"} {
+	for _, mode := range []string{"mirrored", "nat"} {
 		t.Run(mode, func(t *testing.T) {
 			upstream, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
@@ -68,7 +68,7 @@ func TestDirectAndNATForwarding(t *testing.T) {
 			dir := t.TempDir()
 			noncePath := filepath.Join(dir, "nonce")
 			os.WriteFile(noncePath, []byte(nonce), 0600)
-			if mode != "wsl2_nat" {
+			if mode != "nat" {
 				assuan := filepath.Join(dir, "assuan")
 				os.WriteFile(assuan, []byte(strconv.Itoa(upstream.Addr().(*net.TCPAddr).Port)+"\n"+nonce), 0600)
 				bin := filepath.Join(dir, "bin")
@@ -157,7 +157,7 @@ while True:
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("TEST_LAUNCHES", launches)
-	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
+	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "mirrored", "", 0, "")
 	if _, err := os.Stat(launches); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("started before accept: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestConcurrentSSHClients(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("TEST_LAUNCHES", launches)
-	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
+	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "mirrored", "", 0, "")
 	results := make(chan error, 4)
 	for i := 0; i < 4; i++ {
 		go func(i int) {
@@ -566,7 +566,7 @@ func TestSSHRestartAfterExit(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("TEST_LAUNCHES", launches)
-	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
+	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "mirrored", "", 0, "")
 	for i := 0; i < 2; i++ {
 		client, err := net.Dial("unix", path)
 		if err != nil {
@@ -603,7 +603,7 @@ func TestSSHDisconnectDrainsResponse(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("TEST_LAUNCHES", launches)
-	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "")
+	path := startSocket(t, socket{"agent-ssh-socket", 0, true}, "mirrored", "", 0, "")
 	first, err := net.Dial("unix", path)
 	if err != nil {
 		t.Fatal(err)
@@ -650,7 +650,7 @@ func TestSSHProcessStopsOnShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go serve(ctx, listener, socket{"agent-ssh-socket", 0, true}, "wsl2_mirrored", "", 0, "", slog.Default())
+	go serve(ctx, listener, socket{"agent-ssh-socket", 0, true}, "mirrored", "", 0, "", slog.Default())
 	client, err := net.Dial("unix", listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)

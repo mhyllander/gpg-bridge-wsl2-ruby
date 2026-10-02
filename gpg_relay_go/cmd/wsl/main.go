@@ -37,7 +37,7 @@ func main() {
 }
 
 func run() error {
-	mode := flag.String("mode", "wsl2_mirrored", "GPG access mode: wsl1, wsl2_nat, wsl2_mirrored, or npiperelay")
+	mode := flag.String("mode", "mirrored", "GPG access mode: nat, mirrored, or npiperelay")
 	ssh := flag.Bool("enable-ssh-support", false, "forward SSH through npiperelay")
 	remote := flag.String("remote-address", "", "Windows relay address (default: gateway in NAT mode, localhost otherwise)")
 	port := flag.Int("port", 6910, "first of three GPG relay ports")
@@ -47,7 +47,7 @@ func run() error {
 	activated := flag.Bool("systemd", false, "use systemd socket activation")
 	logLevel := flag.String("log-level", "WARN", "DEBUG, INFO, WARN, or ERROR")
 	flag.Parse()
-	if *mode != "wsl1" && *mode != "wsl2_nat" && *mode != "wsl2_mirrored" && *mode != "npiperelay" {
+	if *mode != "nat" && *mode != "mirrored" && *mode != "npiperelay" {
 		return fmt.Errorf("invalid mode %q", *mode)
 	}
 	if *port < 1 || *port > 65533 {
@@ -62,7 +62,7 @@ func run() error {
 		return fmt.Errorf("cannot find gpgconf.exe in PATH: %w", err)
 	}
 	if *remote == "" {
-		if *mode == "wsl2_nat" {
+		if *mode == "nat" {
 			gateway, err := defaultGateway()
 			if err != nil {
 				return err
@@ -72,7 +72,7 @@ func run() error {
 			*remote = "127.0.0.1"
 		}
 	}
-	if *noncePath == "" && *mode == "wsl2_nat" {
+	if *noncePath == "" && *mode == "nat" {
 		home, err := relay.CommandOutput("gpgconf.exe", "--list-dirs", "homedir")
 		if err != nil {
 			return err
@@ -83,7 +83,7 @@ func run() error {
 		}
 		*noncePath = filepath.Join(converted, "gpg_relay.nonce")
 	}
-	if *mode == "wsl2_nat" && *noncePath == "" {
+	if *mode == "nat" && *noncePath == "" {
 		return errors.New("nonce file is required in NAT mode")
 	}
 	if *activated {
@@ -283,7 +283,7 @@ func serve(ctx context.Context, listener net.Listener, s socket, mode, remote st
 			}
 			var upstream net.Conn
 			var dialErr error
-			if mode == "wsl2_nat" {
+			if mode == "nat" {
 				upstream, dialErr = relay.DialWindows(remote, firstPort+s.offset, noncePath)
 			} else {
 				path, err := paths.wslPath(s.name)
