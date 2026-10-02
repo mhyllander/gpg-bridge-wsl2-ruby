@@ -204,6 +204,10 @@ The recommended way to run the WSL Relay is via systemd socket activation. This
 eliminates the need for manual startup scripts and provides better startup
 ordering and resource management.
 
+The [systemd](systemd) folder contains examples of running gpg_relay_wsl under systemd.
+You will need to update the `ExecStart` command with the command to run.
+
+
 ### Installation
 
 1. Copy the systemd unit files to your user systemd directory:

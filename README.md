@@ -12,7 +12,7 @@ GPG Relay is available in two implementations:
 |---|---|---|
 | **Distribution** | Self-contained executables | Requires Ruby and gems in WSL (and possibly Windows) |
 | **Components** | `gpg_relay_wsl` and `gpg_relay_win.exe` | `gpg_relay_wsl.rb` and `gpg_relay_win.rb` |
-| **Best for** | Users who want a simple, dependency-free setup | Users who prefer Ruby to easily modify the code |
+| **Best for** | Users who want a simple, dependency-free setup | Users who prefer Ruby for ease of updating |
 
 ## Quick start
 
@@ -21,11 +21,15 @@ GPG Relay is available in two implementations:
 3. Configure your [WSL networking mode](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#main-wsl-settings) in `.wslconfig` (may require a restart of WSL).
 4. Start the relay.
 
-## Running under systemd
+## Relaying using only npiperelay
 
-The [systemd](systemd) folder contains examples of running gpg_relay_wsl under systemd. You will need to update the `ExecStart` command with the command to run.
+It's possible to use only `npiperelay` to relay GPG and SSH requests to gpg-agent.exe.
+An example of this is in the [npiperelay](npiperelay) folder, where `socat` and `npiperelay` are used
+to relay ssh requests to the ssh named pipe in Windows.
 
-The [npiperelay](npiperelay) folder contains an example of using `socat` and `npiperelay` to relay ssh requests to the ssh named pipe in Windows.
+While this works, this approach might have problems if you start multiple SSH clients simultaneously,
+since one `npiperelay` process is started per SSH connection. See the [notes on gpg-agent.exe](gpg_relay_go/README.md#a-note-about-gpg-agentexe-and-its-support-for-ssh)
+for more about the SSH support.
 
 ## License
 
