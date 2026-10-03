@@ -5,7 +5,7 @@ After=gpg-npiperelay-agent-ssh-socket.socket
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/socat ACCEPT-FD:3,fork EXEC:"npiperelay -ei -s -p -l //./pipe/openssh-ssh-agent",nofork
+ExecStart=/usr/bin/socat ACCEPT-FD:3,fork EXEC:"npiperelay -ep -s -p -l //./pipe/openssh-ssh-agent",nofork
 Environment='PATH=/usr/local/bin:/usr/bin:/bin'
 Restart=on-failure
 RestartSec=5
