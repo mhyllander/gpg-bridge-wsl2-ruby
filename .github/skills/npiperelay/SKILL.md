@@ -48,7 +48,7 @@ This skill covers the [albertony/npiperelay](https://github.com/albertony/npiper
 - `-p`, `-l`, `-s` — only apply to **Windows Named Pipe** targets
 - `-a` — only applies to **Assuan file socket** targets
 - `-ep`, `-ei`, `-bg` — apply to **both** Named Pipe and Assuan targets
-- `-ei` and `-s` are **mutually exclusive**: if `-ei` is specified, `-s` has no effect (npiperelay exits on stdin EOF instead of sending the 0-byte close message)
+- `-ei` take precedence over `-s`: if `-ei` is specified, `-s` has no effect (npiperelay exits on stdin EOF instead of sending the 0-byte close message)
 
 ## Common Patterns
 
